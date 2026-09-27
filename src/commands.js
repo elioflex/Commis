@@ -12,7 +12,14 @@ import {
 import { panelRow, reviewModal } from "./components.js";
 import { errorEmbed, helpEmbed, infoEmbed, panelEmbed, rateEmbed, stockEmbed, successEmbed } from "./embeds.js";
 import { isStaff } from "./guild-utils.js";
-import { formatMillions, formatMoney, setRate, setStock } from "./market.js";
+import {
+    effectiveRate,
+    formatMillions,
+    formatMoney,
+    setRate,
+    setServerMultiplier,
+    setStock,
+} from "./market.js";
 import { checkGuild, formatChecks } from "./preflight.js";
 import { setupGuild } from "./setup.js";
 import { update } from "./store.js";
@@ -39,6 +46,8 @@ const STOCK_STATUS_CHOICES = [
     { name: "🟡 Stock limité", value: "low" },
     { name: "🔴 Complet", value: "full" },
 ];
+
+const RATE_KINDS_PREVIEW = ["buy", "sell", "exchange"];
 
 export const commandData = [
     new SlashCommandBuilder()
@@ -107,7 +116,7 @@ export const commandData = [
         .addSubcommand((sub) =>
             sub
                 .setName("set")
-                .setDescription("Définir un taux (staff)")
+                .setDescription("Définir le taux de base (staff)")
                 .addStringOption((option) =>
                     option
                         .setName("devise")
@@ -125,9 +134,29 @@ export const commandData = [
                 .addNumberOption((option) =>
                     option
                         .setName("prix")
-                        .setDescription("Prix par million de kamas")
+                        .setDescription("Prix de base par million de kamas")
                         .setRequired(true)
                         .setMinValue(0.0001),
+                ),
+        )
+        .addSubcommand((sub) =>
+            sub
+                .setName("serveur")
+                .setDescription("Ajuster le prix d'un serveur (staff)")
+                .addStringOption((option) =>
+                    option
+                        .setName("serveur")
+                        .setDescription("Serveur Dofus")
+                        .setRequired(true)
+                        .addChoices(...DOFUS_SERVERS.map((server) => ({ name: server.name, value: server.code }))),
+                )
+                .addNumberOption((option) =>
+                    option
+                        .setName("multiplicateur")
+                        .setDescription("1 = prix de base · 1.1 = +10 % · 0.9 = -10 %")
+                        .setRequired(true)
+                        .setMinValue(0.1)
+                        .setMaxValue(5),
                 ),
         ),
 
@@ -310,13 +339,40 @@ export async function runCommand(client, interaction) {
         if (sub === "voir") return reply(interaction, { embeds: [rateEmbed()] });
         if (!(await guardStaff(interaction))) return undefined;
 
+        if (sub === "serveur") {
+            const serverCode = interaction.options.getString("serveur", true);
+            const multiplier = interaction.options.getNumber("multiplicateur", true);
+            const applied = setServerMultiplier(serverCode, multiplier);
+            const name = serverByCode(serverCode)?.name ?? serverCode;
+
+            const preview = RATE_KINDS_PREVIEW.map((kind) => {
+                const rate = effectiveRate("EUR", kind, serverCode);
+                const label = kind === "buy" ? "achat" : kind === "sell" ? "vente" : "échange";
+                return `${label} : **${formatMoney(rate, "EUR")}/M**`;
+            });
+
+            return reply(interaction, {
+                embeds: [
+                    successEmbed(
+                        [
+                            `Multiplicateur de **${name}** : **×${applied}**`,
+                            preview.join(" • "),
+                            "",
+                            "_1.0 = prix de base · 1.1 = +10 % · 0.9 = -10 %. Remets 1 pour revenir au prix de base._",
+                        ].join("\n"),
+                        "🖥️ Prix du serveur ajusté",
+                    ),
+                ],
+            });
+        }
+
         const currency = interaction.options.getString("devise", true);
         const kind = interaction.options.getString("sens", true);
         const price = interaction.options.getNumber("prix", true);
         setRate(currency, kind, price);
 
         return reply(interaction, {
-            embeds: [successEmbed(`Taux **${kind}** ${currency} mis à jour : **${formatMoney(price, currency)}** / M`, "📈 Taux enregistré")],
+            embeds: [successEmbed(`Taux **${kind}** ${currency} mis à jour : **${formatMoney(price, currency)}** / M\n\n_C'est le prix de base. Ajuste chaque serveur avec \`/rate serveur\`._`, "📈 Taux enregistré")],
         });
     }
 

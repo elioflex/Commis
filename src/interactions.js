@@ -1,6 +1,6 @@
 import { AttachmentBuilder } from "discord.js";
 
-import { CURRENCY_CODES, TICKET_TYPES, serverByCode } from "../config.js";
+import { CURRENCY_CODES, TICKET_TYPES, paymentByCode, serverByCode } from "../config.js";
 import {
     closeReason,
     closeReasonRow,
@@ -17,7 +17,8 @@ import {
 } from "./components.js";
 import { baseEmbed, errorEmbed, infoEmbed, successEmbed } from "./embeds.js";
 import { isStaff } from "./guild-utils.js";
-import { parseMillions, rateFor, formatMoney, formatMillions, quote } from "./market.js";
+import { parseMillions, effectiveRate, formatMoney, formatMillions, quote } from "./market.js";
+
 import { update } from "./store.js";
 import { buildTranscript } from "./transcript.js";
 import {
@@ -271,16 +272,22 @@ async function handleSelect(interaction) {
         if (!type) return respond(interaction, { embeds: [errorEmbed("Type de ticket inconnu.")] });
 
         const label = serverByCode(serverCode)?.name ?? serverCode;
+        const kind = typeId === "achat" ? "buy" : typeId === "vente" ? "sell" : "exchange";
+        const rate = effectiveRate("EUR", kind, serverCode);
+        const priceLine =
+            rate === null
+                ? "Taux : à confirmer avec le staff"
+                : `Prix sur ce serveur : **${formatMoney(rate, "EUR")}/M**`;
 
         if (!type.needsPayment) {
             return interaction.update({
-                embeds: [infoEmbed(`Serveur choisi : **${label}**`, "🌍 Étape suivante")],
+                embeds: [infoEmbed(`Serveur choisi : **${label}**\n${priceLine}`, "🌍 Étape suivante")],
                 components: [continueRow(typeId, serverCode, "none")],
             });
         }
 
         return interaction.update({
-            embeds: [infoEmbed(`Serveur choisi : **${label}**\n\nComment souhaites-tu être payé ?`, "💳 Étape suivante")],
+            embeds: [infoEmbed(`Serveur choisi : **${label}**\n${priceLine}\n\nComment souhaites-tu être payé ?`, "💳 Étape suivante")],
             components: [paymentSelectRow(typeId, serverCode)],
         });
     }
@@ -291,7 +298,8 @@ async function handleSelect(interaction) {
         const paymentCode = interaction.values[0];
         const type = TICKET_TYPES[typeId];
         const rateKind = typeId === "achat" ? "buy" : typeId === "vente" ? "sell" : "exchange";
-        const rate = rateFor("EUR", rateKind);
+        const rate = effectiveRate("EUR", rateKind, serverCode);
+        const paymentLabel = paymentByCode(paymentCode);
         return interaction.update({
             embeds: [
                 baseEmbed({ color: type.color })
@@ -299,8 +307,8 @@ async function handleSelect(interaction) {
                     .setDescription(
                         [
                             `**Serveur Dofus :** ${serverByCode(serverCode)?.name ?? serverCode}`,
-                            `**Paiement :** ${paymentCode}`,
-                            `**Taux indicatif (EUR) :** ${rate === null ? "à confirmer avec le staff" : `${formatMoney(rate, "EUR")}/M`}`,
+                            `**Paiement :** ${paymentLabel.emoji} ${paymentLabel.label}`,
+                            `**Taux sur ce serveur (EUR) :** ${rate === null ? "à confirmer avec le staff" : `${formatMoney(rate, "EUR")}/M`}`,
                             "",
                             "Clique sur le bouton pour décrire ta demande — le staff arrive juste après 👇",
                         ].join("\n"),
@@ -469,7 +477,8 @@ async function createTicketFromModal(interaction, typeId, serverCode, paymentCod
         if (notes) payload.notes = notes;
 
         const rateKind = typeId === "achat" ? "buy" : typeId === "vente" ? "sell" : "exchange";
-        const rate = rateFor(currency, rateKind);
+        // Prix réel : taux de base × multiplicateur du serveur choisi.
+        const rate = effectiveRate(currency, rateKind, serverCode);
         const q = quote(rateKind, millions, rate);
         if (q) payload.totalPreview = q.total;
     } else {

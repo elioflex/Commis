@@ -56,6 +56,27 @@ test("market data has a seed rate and stock for every configured server", () => 
     }
 });
 
+test("per-server pricing multiplies the base rate and resets to 1", async () => {
+    const { effectiveRate, serverMultiplier, setServerMultiplier } = await import("../src/market.js");
+
+    const base = rateFor("EUR", "buy");
+    // Pas de réglage → prix de base.
+    assert.equal(serverMultiplier("serveur-inconnu"), 1);
+    assert.equal(effectiveRate("EUR", "buy", "serveur-inconnu"), base);
+
+    // Multiplicateur du seed : Hellmina ×0.85 → moins cher que la base.
+    const hellmina = effectiveRate("EUR", "buy", "hellmina");
+    assert.ok(hellmina < base, `${hellmina} should be cheaper than base ${base}`);
+
+    // Réglage manuel + reset.
+    setServerMultiplier("drac", 1.2);
+    assert.equal(effectiveRate("EUR", "buy", "drac"), Math.round(base * 1.2 * 1000) / 1000);
+    assert.equal(setServerMultiplier("drac", 1), 1);
+    assert.equal(effectiveRate("EUR", "buy", "drac"), base);
+    // valeur de seed restaurée pour les autres tests
+    setServerMultiplier("drac", 1.15);
+});
+
 test("formatMoney never renders NaN", () => {
     assert.match(formatMoney(12.5, "EUR"), /12,50/);
     assert.equal(formatMoney(undefined, "EUR"), "—");

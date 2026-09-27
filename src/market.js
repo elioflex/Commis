@@ -1,5 +1,5 @@
-import { CURRENCIES, currencyInfo, serverByCode } from "../config.js";
-import { read, setPath } from "./store.js";
+import { CURRENCIES, currencyInfo, DOFUS_SERVERS, serverByCode } from "../config.js";
+import { read, setPath, deletePath } from "./store.js";
 
 export const STOCK_STATUS = {
     open: { label: "🟢 Disponible", color: 0x57f287 },
@@ -16,6 +16,40 @@ export function rateFor(currency, kind) {
     const code = String(currency).toUpperCase();
     const value = read("market.json").rates?.[code]?.[kind];
     return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+/**
+ * Per-server price multiplier, stored in market.json as `serverRates[code]`.
+ * A value of 1.1 means this server's kamas cost 10% more than the base rate;
+ * 0.9 means 10% cheaper. Servers without an entry use 1.
+ */
+export function serverMultiplier(serverCode) {
+    if (!serverCode) return 1;
+    const raw = read("market.json").serverRates?.[serverCode];
+    const value = typeof raw === "number" ? raw : Number(raw);
+    return Number.isFinite(value) && value > 0 ? value : 1;
+}
+
+/** Staff-facing setter. Pass 1 (or null) to reset a server to the base price. */
+export function setServerMultiplier(serverCode, value) {
+    const parsed = typeof value === "number" ? value : Number.parseFloat(value);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+        deletePath("market.json", `serverRates.${serverCode}`);
+        return 1;
+    }
+    setPath("market.json", `serverRates.${serverCode}`, Math.round(parsed * 1000) / 1000);
+    return parsed;
+}
+
+export function serverMultipliers() {
+    return read("market.json").serverRates ?? {};
+}
+
+/** The price actually charged: base rate × server multiplier. */
+export function effectiveRate(currency, kind, serverCode) {
+    const base = rateFor(currency, kind);
+    if (base === null) return null;
+    return Math.round(base * serverMultiplier(serverCode) * 1000) / 1000;
 }
 
 export function setRate(currency, kind, value) {
@@ -90,6 +124,43 @@ export function parseMillions(input) {
     if (unit === "k" || unit === "kk") return value / 1000;
     if (unit === "milliard" || unit === "milliards") return value * 1000;
     return value;
+}
+
+/**
+ * One line per Dofus server: its price for this kind, computed from the base
+ * rate and its own multiplier. Sorted by price, cheapest first.
+ */
+export function serverRateLines(currency, kind) {
+    const base = rateFor(currency, kind);
+    if (base === null) return ["_Aucun taux de base configuré. Staff : `/rate set`._"];
+
+    const { code, symbol } = currencyInfo(currency);
+    const rows = DOFUS_SERVERS.map((server) => {
+        const multiplier = serverMultiplier(server.code);
+        const price = Math.round(base * multiplier * 1000) / 1000;
+        return { name: server.name, multiplier, price, stock: stockFor(server.code) };
+    }).sort((a, b) => a.price - b.price || a.name.localeCompare(b.name));
+
+    const lines = rows.map(({ name, price, stock }) => {
+        const marker = stock.status === "open" ? "🟢" : stock.status === "low" ? "🟡" : "🔴";
+        const priceText = symbol ? `${price.toLocaleString("fr-FR")} ${symbol}` : `${price.toLocaleString("fr-FR")} ${code}`;
+        return `${marker} **${name}** — ${priceText}/M`;
+    });
+
+    return lines.length ? lines : ["_Aucun serveur configuré._"];
+}
+
+/**
+ * Discord embeds cap descriptions at 4096 characters; 24 servers × ~60 chars
+ * fits comfortably, but guard anyway by splitting into two fields.
+ */
+export function serverRateFields(currency, kind) {
+    const lines = serverRateLines(currency, kind);
+    const mid = Math.ceil(lines.length / 2);
+    return [
+        { name: "🖥️ Serveurs (1/2)", value: lines.slice(0, mid).join("\n"), inline: false },
+        { name: "🖥️ Serveurs (2/2)", value: lines.slice(mid).join("\n") || "—", inline: false },
+    ];
 }
 
 /** Lines describing the current rate table, per currency. */

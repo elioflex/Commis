@@ -3,7 +3,7 @@ import { AttachmentBuilder, ChannelType, PermissionFlagsBits } from "discord.js"
 import { BRAND, SETTINGS, TICKET_STAGES, TICKET_TYPES, serverByCode } from "../config.js";
 import { infoEmbed, ticketClosedEmbed, ticketIntroEmbed } from "./embeds.js";
 import { ensureCategory, logChannel, staffRole, transcriptChannel } from "./guild-utils.js";
-import { quote, rateFor } from "./market.js";
+import { quote, effectiveRate } from "./market.js";
 import { read, update } from "./store.js";
 import { ticketActionRow } from "./components.js";
 import { buildTranscript } from "./transcript.js";
@@ -126,7 +126,8 @@ export async function openTicket({ guild, member, typeId, payload = {} }) {
     const rateKind = RATE_KIND_BY_TYPE[typeId] ?? null;
     const currency = payload.currency ? String(payload.currency).toUpperCase() : type.needsPayment ? "EUR" : null;
     const millions = payload.millions ?? null;
-    const rate = currency && rateKind ? rateFor(currency, rateKind) : null;
+    // Prix spécifique au serveur choisi (taux de base × multiplicateur).
+    const rate = currency && rateKind ? effectiveRate(currency, rateKind, payload.serverCode) : null;
     const total = quote(rateKind, millions, rate)?.total ?? null;
 
     const ticket = {

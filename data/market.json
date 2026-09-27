@@ -1,36 +1,154 @@
 {
   "updatedAt": null,
+  "serverRates": {
+    "drac": 1.15,
+    "tylezia": 1.1,
+    "orukam": 1.05,
+    "imagiro": 1,
+    "talkasha": 1,
+    "ombre": 1.05,
+    "dakal": 0.95,
+    "mikhal": 0.95,
+    "kourial": 0.9,
+    "rafal": 0.95,
+    "brial": 0.95,
+    "salar": 0.9,
+    "boune": 0.9,
+    "fallanster": 0.9,
+    "tiliwan": 0.9,
+    "kelerog": 0.9,
+    "blair": 0.9,
+    "talok": 0.9,
+    "hellmina": 0.85,
+    "allisteria": 0.9,
+    "rubilax": 0.95,
+    "pandora": 0.95,
+    "ogrest": 0.9,
+    "autre": 1
+  },
   "rates": {
-    "EUR": { "buy": 1.35, "sell": 0.95, "exchange": 0.6 },
-    "USD": { "buy": 1.45, "sell": 1.02, "exchange": 0.65 },
-    "GBP": { "buy": 1.15, "sell": 0.82, "exchange": 0.55 },
-    "MAD": { "buy": 14.5, "sell": 10.2, "exchange": 6.5 },
-    "USDT": { "buy": 1.5, "sell": 1.05, "exchange": 0.68 }
+    "EUR": {
+      "buy": 1.35,
+      "sell": 0.95,
+      "exchange": 0.6
+    },
+    "USD": {
+      "buy": 1.45,
+      "sell": 1.02,
+      "exchange": 0.65
+    },
+    "GBP": {
+      "buy": 1.15,
+      "sell": 0.82,
+      "exchange": 0.55
+    },
+    "MAD": {
+      "buy": 14.5,
+      "sell": 10.2,
+      "exchange": 6.5
+    },
+    "USDT": {
+      "buy": 1.5,
+      "sell": 1.05,
+      "exchange": 0.68
+    }
   },
   "stock": {
-    "drac": { "millions": 250, "status": "open" },
-    "tylezia": { "millions": 180, "status": "open" },
-    "orukam": { "millions": 120, "status": "open" },
-    "imagiro": { "millions": 90, "status": "open" },
-    "talkasha": { "millions": 75, "status": "low" },
-    "ombre": { "millions": 60, "status": "open" },
-    "dakal": { "millions": 40, "status": "low" },
-    "mikhal": { "millions": 35, "status": "low" },
-    "kourial": { "millions": 0, "status": "full" },
-    "rafal": { "millions": 25, "status": "low" },
-    "brial": { "millions": 20, "status": "low" },
-    "salar": { "millions": 0, "status": "full" },
-    "boune": { "millions": 0, "status": "full" },
-    "fallanster": { "millions": 0, "status": "full" },
-    "tiliwan": { "millions": 0, "status": "full" },
-    "kelerog": { "millions": 0, "status": "full" },
-    "blair": { "millions": 0, "status": "full" },
-    "talok": { "millions": 0, "status": "full" },
-    "hellmina": { "millions": 500, "status": "open" },
-    "allisteria": { "millions": 0, "status": "full" },
-    "rubilax": { "millions": 45, "status": "low" },
-    "pandora": { "millions": 30, "status": "low" },
-    "ogrest": { "millions": 0, "status": "full" },
-    "autre": { "millions": 0, "status": "full" }
+    "drac": {
+      "millions": 250,
+      "status": "open"
+    },
+    "tylezia": {
+      "millions": 180,
+      "status": "open"
+    },
+    "orukam": {
+      "millions": 120,
+      "status": "open"
+    },
+    "imagiro": {
+      "millions": 90,
+      "status": "open"
+    },
+    "talkasha": {
+      "millions": 75,
+      "status": "low"
+    },
+    "ombre": {
+      "millions": 60,
+      "status": "open"
+    },
+    "dakal": {
+      "millions": 40,
+      "status": "low"
+    },
+    "mikhal": {
+      "millions": 35,
+      "status": "low"
+    },
+    "kourial": {
+      "millions": 0,
+      "status": "full"
+    },
+    "rafal": {
+      "millions": 25,
+      "status": "low"
+    },
+    "brial": {
+      "millions": 20,
+      "status": "low"
+    },
+    "salar": {
+      "millions": 0,
+      "status": "full"
+    },
+    "boune": {
+      "millions": 0,
+      "status": "full"
+    },
+    "fallanster": {
+      "millions": 0,
+      "status": "full"
+    },
+    "tiliwan": {
+      "millions": 0,
+      "status": "full"
+    },
+    "kelerog": {
+      "millions": 0,
+      "status": "full"
+    },
+    "blair": {
+      "millions": 0,
+      "status": "full"
+    },
+    "talok": {
+      "millions": 0,
+      "status": "full"
+    },
+    "hellmina": {
+      "millions": 500,
+      "status": "open"
+    },
+    "allisteria": {
+      "millions": 0,
+      "status": "full"
+    },
+    "rubilax": {
+      "millions": 45,
+      "status": "low"
+    },
+    "pandora": {
+      "millions": 30,
+      "status": "low"
+    },
+    "ogrest": {
+      "millions": 0,
+      "status": "full"
+    },
+    "autre": {
+      "millions": 0,
+      "status": "full"
+    }
   }
 }

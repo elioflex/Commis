@@ -10,10 +10,12 @@ import {
     serverByCode,
 } from "../config.js";
 import {
+    effectiveRate,
     formatMillions,
     formatMoney,
     rateFor,
     rateLines,
+    serverRateFields,
     stockLines,
     stockSummary,
 } from "./market.js";
@@ -43,8 +45,9 @@ export function panelEmbed(typeId) {
         .setDescription([type.blurb, "", `Clique sur le bouton ci-dessous 👇`].join("\n"));
 
     if (typeId === "achat" || typeId === "vente" || typeId === "echange") {
-        embed.addFields({ name: "📈 Taux", value: rateLines().join("\n"), inline: false });
-        embed.addFields({ name: "📦 Stock par serveur", value: stockLines().join("\n"), inline: false });
+        const kind = typeId === "achat" ? "buy" : typeId === "vente" ? "sell" : "exchange";
+        embed.addFields({ name: "📈 Taux de base (EUR)", value: rateLines({ kinds: [kind] }).join("\n"), inline: false });
+        embed.addFields(...serverRateFields("EUR", kind));
     } else {
         embed.addFields({
             name: "📋 Comment ça marche",
@@ -69,14 +72,17 @@ export function panelEmbed(typeId) {
 
 export function rateEmbed() {
     const summary = stockSummary();
+    const buyFields = serverRateFields("EUR", "buy");
     return baseEmbed()
         .setTitle(`📈 ${BRAND.name} — Taux & stocks`)
         .setDescription(rateLines().join("\n"))
         .addFields(
+            { name: buyFields[0].name, value: buyFields[0].value, inline: false },
+            { name: buyFields[1].name, value: buyFields[1].value, inline: false },
             { name: "📦 Stock", value: stockLines({ onlyAvailable: true }).join("\n"), inline: false },
             {
                 name: "📊 Résumé",
-                value: `${summary.open} serveur(s) dispo • ${summary.low} en stock limité • **${formatMillions(summary.totalMillions)}** au total`,
+                value: `${summary.open} serveur(s) dispo • ${summary.low} en stock limité • **${formatMillions(summary.totalMillions)}** au total\n\n_Prix affichés pour un achat en EUR — utilise le panneau « vente » ou « échange » pour les autres sens._`,
                 inline: false,
             },
         );
@@ -117,7 +123,7 @@ export function ticketIntroEmbed(ticket, user, type) {
     }
     if (ticket.millions) fields.push({ name: "💰 Quantité", value: formatMillions(ticket.millions), inline: true });
     if (ticket.currency) {
-        const rate = rateFor(ticket.currency, ticket.rateKind);
+        const rate = effectiveRate(ticket.currency, ticket.rateKind, ticket.serverCode);
         const total = ticket.total;
         const method =
             ticket.paymentCode && ticket.paymentCode !== "none"
@@ -192,7 +198,7 @@ export function helpEmbed(prefix) {
                 "`/ticket stats` — (staff) statistiques",
                 "",
                 "**Marché**",
-                "`/rate` — voir les taux • `/rate set <devise> <achat|vente|echange> <prix>`",
+                "`/rate` — voir les prix par serveur • `/rate set <devise> <sens> <prix>` (base) • `/rate serveur <serveur> <multiplicateur>` (staff)",
                 "`/stock` — voir le stock • `/stock set <serveur> <millions> <dispo|limite|complet>`",
                 "`/avis <note> <texte>` — laisser un avis",
                 "",
