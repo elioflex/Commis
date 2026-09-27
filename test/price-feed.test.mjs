@@ -70,6 +70,7 @@ const LESKAMAS_HTML = `<p>Vendez vos kamas</p><div><table border="1" class="hove
 <tr style="background: white"><td colspan="7" style="text-align:center">Dofus Kamas</td></tr>
 <tr onmouseover="x"><td>Draconiros</td><td>0.52€/M</td><td>0.515€/M</td><td>Incomplet</td></tr>
 <tr><td>Ombre(Shadow)</td><td>0.371€/M</td><td>0.367€/M</td><td><font color='red'>Stock complet</font></td></tr>
+<tr><td>Salar</td><td>0.30€/M</td><td>0.297€/M</td><td>Incomplet</td></tr>
 <tr style="background: white"><td colspan="7" style="text-align:center">Dofus Touch Kamas</td></tr>
 <tr><td>Kelerog</td><td>2.28€/M</td><td>2.257€/M</td><td>Incomplet</td></tr>
 <tr><td>Temporix-1</td><td>0.1€/M</td><td>0.099€/M</td><td>Incomplet</td></tr>
@@ -98,13 +99,15 @@ test("server matching stays inside the same game and skips seasonal servers", ()
     assert.equal(gameFromTitle("DOFUS RETRO SAISONNIERS"), null);
     assert.equal(matchServer("dofus", "Ombre &#8211; Shadow"), "ombre");
     assert.equal(matchServer("dofus", "Tal kasha"), "talkasha");
-    assert.equal(matchServer("touch", "Kelerog"), "kelerog");
+    // Dofus 3 only: Touch / Retro / Wakfu listings are recognised, then ignored.
+    assert.equal(matchServer("touch", "Kelerog"), null);
+    assert.equal(matchServer("touch", "Draconiros"), null);
     assert.equal(matchServer("dofus", "Kelerog"), null);
     assert.equal(matchServer("retro", "Boune 2"), null);
 });
 
 test("kamasv: per-million median over in-stock lots of each server", () => {
-    assert.deepEqual(parseKamasv(KAMASV_PRODUCTS, KAMASV_CATEGORIES), { drac: 0.77, ombre: 0.64, kelerog: 3.32 });
+    assert.deepEqual(parseKamasv(KAMASV_PRODUCTS, KAMASV_CATEGORIES), { drac: 0.77, ombre: 0.64 });
 });
 
 test("1kamas: one variation per matched server, first product wins", () => {
@@ -115,7 +118,7 @@ test("1kamas: one variation per matched server, first product wins", () => {
 });
 
 test("leskamas: payout per game section, seasonal servers skipped", () => {
-    assert.deepEqual(parseLeskamas(LESKAMAS_HTML), { drac: 0.52, ombre: 0.371, kelerog: 2.28, rubilax: 1.02 });
+    assert.deepEqual(parseLeskamas(LESKAMAS_HTML), { drac: 0.52, ombre: 0.371, salar: 0.3 });
     assert.deepEqual(parseLeskamas("<html>maintenance</html>"), {});
 });
 
@@ -172,9 +175,9 @@ test("runPriceFeed stores the reference and prices follow manual > web > base", 
         assert.equal(effectiveRate("EUR", "sell", "drac"), 0.54);
         // No payout source for Talkasha… and no retail either (out of stock) → base.
         assert.equal(priceSource("talkasha", "sell"), "base");
-        // Rubilax: payout only → sell is automatic, buy stays on the base rate.
-        assert.equal(autoPrice("rubilax", "sell"), 1.06);
-        assert.equal(priceSource("rubilax", "buy"), "base");
+        // Salar: payout only → sell is automatic (0.30 × 103 % → 0.31), buy stays on the base rate.
+        assert.equal(autoPrice("salar", "sell"), 0.31);
+        assert.equal(priceSource("salar", "buy"), "base");
 
         // Manual wins, clearing it gives the web price back.
         setServerPrice("drac", "buy", 1.5);
@@ -280,9 +283,9 @@ test("what we pay never eats the margin, unless staff pinned it by hand", async 
 test("manager adjustments: one, several or all servers, per side", async () => {
     await withMarket(async () => {
         seedFeed();
-        assert.deepEqual(resolveServers("drac, Ombre (Shadow); kelerog").codes, ["drac", "ombre", "kelerog"]);
-        assert.deepEqual(resolveServers("touch").codes, ["tiliwan", "kelerog", "blair", "talok"]);
-        assert.equal(resolveServers("tous").codes.length, 23);
+        assert.deepEqual(resolveServers("drac, Ombre (Shadow); mikhal").codes, ["drac", "ombre", "mikhal"]);
+        assert.equal(resolveServers("tous").codes.length, 13);
+        assert.deepEqual(resolveServers("kelerog").unknown, ["kelerog"], "no Touch servers any more");
         assert.deepEqual(resolveServers("drac, truc").unknown, ["truc"]);
 
         setServerAdjustments(["drac"], ["buy"], -2);

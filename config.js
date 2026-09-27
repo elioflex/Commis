@@ -73,13 +73,10 @@ export const SETTINGS = {
         : "when-empty",
 };
 
-/** Currencies the bot quotes prices in. */
+/** Currencies the bot quotes prices in: euro and Moroccan dirham only. */
 export const CURRENCIES = [
     { code: "EUR", label: "Euro", symbol: "€" },
-    { code: "USD", label: "Dollar US", symbol: "$" },
-    { code: "GBP", label: "Livre sterling", symbol: "£" },
     { code: "MAD", label: "Dirham marocain", symbol: "DH" },
-    { code: "USDT", label: "Tether (USDT)", symbol: "₮" },
 ];
 
 export const CURRENCY_CODES = CURRENCIES.map((c) => c.code);
@@ -88,16 +85,14 @@ export const currencyInfo = (code) =>
     CURRENCIES.find((c) => c.code === code.toUpperCase()) ?? { code, label: code, symbol: "" };
 
 /**
- * Dofus servers you trade on. `code` is used in custom ids, so keep it short.
- * `game` matters for the automatic price feed: a Touch or Retro server with the
- * same name as a Dofus 3 one is a different market with a different price.
- * `aliases` are extra spellings used by the sites the feed reads.
+ * Dofus servers you trade on — Dofus 3 only, we don't sell Touch, Retro or Wakfu
+ * kamas. `code` is used in custom ids, so keep it short. `game` tells the price
+ * feed which listings are ours (the shops also sell Touch / Retro / Wakfu servers
+ * with the same names, at other prices). `aliases` are extra spellings used by
+ * the sites the feed reads.
  */
 export const GAMES = {
     dofus: { label: "Dofus 3", short: null },
-    touch: { label: "Dofus Touch", short: "Touch" },
-    retro: { label: "Dofus Retro", short: "Retro" },
-    wakfu: { label: "Wakfu", short: "Wakfu" },
 };
 
 export const DOFUS_SERVERS = [
@@ -113,17 +108,7 @@ export const DOFUS_SERVERS = [
     { code: "rafal", name: "Rafal", game: "dofus" },
     { code: "brial", name: "Brial", game: "dofus" },
     { code: "salar", name: "Salar", game: "dofus" },
-    { code: "boune", name: "Boune", game: "retro" },
-    { code: "fallanster", name: "Fallanster", game: "retro" },
-    { code: "tiliwan", name: "Tiliwan", game: "touch" },
-    { code: "kelerog", name: "Kelerog", game: "touch" },
-    { code: "blair", name: "Blair", game: "touch" },
-    { code: "talok", name: "Talok", game: "touch" },
     { code: "hellmina", name: "Hellmina", game: "dofus" },
-    { code: "allisteria", name: "Allisteria", game: "retro" },
-    { code: "rubilax", name: "Rubilax", game: "wakfu" },
-    { code: "pandora", name: "Pandora", game: "wakfu" },
-    { code: "ogrest", name: "Ogrest", game: "wakfu" },
     { code: "autre", name: "Autre / mono-compte", game: null },
 ];
 

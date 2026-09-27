@@ -262,7 +262,7 @@ export const commandData = [
                 .addStringOption((option) =>
                     option
                         .setName("serveurs")
-                        .setDescription("« tous », un jeu (dofus, touch, retro, wakfu) ou des noms : drac, ombre, kelerog")
+                        .setDescription("« tous » ou des noms séparés par des virgules : drac, ombre, mikhal")
                         .setRequired(true)
                         .setMaxLength(300),
                 )
@@ -477,7 +477,7 @@ export async function runCommand(client, interaction) {
                     embeds: [
                         errorEmbed(
                             `${unknown.length ? `Serveur(s) inconnu(s) : ${unknown.map((name) => `« ${name} »`).join(", ")}\n` : ""}` +
-                                "Écris « tous », un jeu (dofus, touch, retro, wakfu) ou des noms séparés par des virgules. Rien n'a été modifié.",
+                                "Écris « tous » ou des noms séparés par des virgules (ex. drac, ombre). Rien n'a été modifié.",
                         ),
                     ],
                 });

@@ -13,7 +13,10 @@ import {
     serverPriceSummary,
     serverRateFields,
     setServerPrice,
+    stockLines,
+    stockSummary,
 } from "../src/market.js";
+import { read, setPath } from "../src/store.js";
 
 /** Discord rejects a message whose embeds exceed these limits. */
 function assertEmbedFits(embed, label) {
@@ -40,8 +43,8 @@ test("a fixed server price wins over base × multiplier, in EUR and converted cu
         assert.equal(effectiveRate("EUR", "buy", "drac"), 2);
 
         // Other currencies keep the owner's spread from the base-rate table.
-        const ratio = rateFor("USD", "buy") / rateFor("EUR", "buy");
-        assert.equal(effectiveRate("USD", "buy", "drac"), Math.round(2 * ratio * 1000) / 1000);
+        const ratio = rateFor("MAD", "buy") / rateFor("EUR", "buy");
+        assert.equal(effectiveRate("MAD", "buy", "drac"), Math.round(2 * ratio * 1000) / 1000);
 
         // Other kinds and servers are untouched.
         assert.equal(serverPrice("drac", "sell"), null);
@@ -55,9 +58,9 @@ test("a fixed server price wins over base × multiplier, in EUR and converted cu
     }
 });
 
-test("serverPriceSummary lists every currency", () => {
+test("prices are shown in euro and dirham only", () => {
     const summary = serverPriceSummary("buy", "drac");
-    for (const symbol of ["€", "$", "£", "DH", "₮"]) assert.ok(summary.includes(symbol), `${symbol} in ${summary}`);
+    assert.match(summary, /^[\d,]+ € · [\d,]+ DH$/);
 });
 
 test("price table round-trips and rejects typos without partial updates", () => {
@@ -99,4 +102,15 @@ test("buy list puts sold-out servers last, cheapest first among the rest", () =>
         .filter((line) => !line.startsWith("└"));
     const firstFull = names.findIndex((line) => line.startsWith("🔴"));
     if (firstFull !== -1) assert.ok(names.slice(firstFull).every((line) => line.startsWith("🔴")));
+});
+
+test("stock views skip servers we no longer sell", () => {
+    const saved = structuredClone(read("market.json").stock);
+    try {
+        setPath("market.json", "stock.kelerog", { millions: 500, status: "open" });
+        assert.ok(!stockLines().some((line) => line.includes("kelerog") || line.includes("Kelerog")));
+        assert.equal(stockSummary().servers, stockLines().length);
+    } finally {
+        setPath("market.json", "stock", saved);
+    }
 });

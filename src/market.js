@@ -213,8 +213,8 @@ const simplify = (text) =>
         .replace(/[^a-z0-9]/g, "");
 
 /**
- * Turn what a manager types into server codes: "tous", a game ("dofus", "touch",
- * "retro", "wakfu") or names separated by commas ("drac, ombre, kelerog").
+ * Turn what a manager types into server codes: "tous" (or "dofus") or names
+ * separated by commas ("drac, ombre, mikhal").
  */
 export function resolveServers(text) {
     const priced = DOFUS_SERVERS.filter((server) => server.game);
@@ -326,7 +326,7 @@ export function competitorEdge(serverCode, kind) {
         .sort((a, b) => b.gap - a.gap);
 }
 
-/** "1,55 € · 1,67 $ · 1,32 £ · 16,68 DH · 1,73 ₮" for one server and kind. */
+/** "1,55 € · 16,68 DH" for one server and kind. */
 export function serverPriceSummary(kind, serverCode) {
     const cells = CURRENCIES.map((currency) => {
         const rate = effectiveRate(currency.code, kind, serverCode);
@@ -558,10 +558,12 @@ export function rateLines({ kinds = RATE_KINDS } = {}) {
 }
 
 /** Lines describing stock per Dofus server. */
+/** Stocked server codes, skipping servers no longer sold (old Touch / Retro / Wakfu entries). */
+const stockedCodes = () => Object.keys(read("market.json").stock ?? {}).filter((code) => serverByCode(code));
+
 export function stockLines({ onlyAvailable = false } = {}) {
-    const stock = read("market.json").stock ?? {};
     const lines = [];
-    for (const code of Object.keys(stock)) {
+    for (const code of stockedCodes()) {
         const info = serverByCode(code);
         const { millions, status } = stockFor(code);
         if (onlyAvailable && status === "full") continue;
@@ -573,8 +575,7 @@ export function stockLines({ onlyAvailable = false } = {}) {
 }
 
 export function stockSummary() {
-    const stock = read("market.json").stock ?? {};
-    const codes = Object.keys(stock);
+    const codes = stockedCodes();
     const open = codes.filter((c) => stockFor(c).status === "open").length;
     const low = codes.filter((c) => stockFor(c).status === "low").length;
     const total = codes.reduce((sum, c) => sum + stockFor(c).millions, 0);

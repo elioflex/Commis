@@ -180,7 +180,7 @@ modale (sujet, détails, référence de commande).
 | `/rate prix <serveur> <sens> <prix>` | Manager | Fixe le prix réel d'un serveur en EUR/M (0 = revenir au prix web / taux de base) |
 | `/rate tableau` | Manager | Modifie les prix de tous les serveurs dans un seul formulaire |
 | `/rate auto [actif] [achat] [vente] [echange] [actualiser]` | Staff (voir) · Manager (réglages) | Prix web automatiques (kamasv, 1kamas, leskamas) : nos prix vs concurrents par serveur, pause, pourcentages, relevé immédiat |
-| `/rate ajuster <sens> <serveurs> <%>` | Manager | Ajuste un peu le prix achat et/ou vente d'un serveur, d'une liste (`drac, ombre`), d'un jeu (`touch`) ou de `tous` |
+| `/rate ajuster <sens> <serveurs> <%>` | Manager | Ajuste un peu le prix achat et/ou vente d'un serveur, d'une liste (`drac, ombre`) ou de `tous` |
 | `/stock voir` | Tous | Affiche le stock par serveur Dofus |
 | `/stock set <serveur> <millions> [statut]` | Staff | Met à jour le stock (statut auto : `open` &gt; 100 M, `low`, `full` à 0) |
 | `/avis` | Tous | Publie un avis dans le salon `⭐・avis-clients` |

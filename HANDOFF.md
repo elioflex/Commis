@@ -83,7 +83,7 @@ kamas-market-bot/
     └── setup.mjs          ← chaque process de test travaille sur une copie temporaire de data/
 ```
 
-**45 tests au total** — `npm test` (node:test, sans dépendance).
+**46 tests au total** — `npm test` (node:test, sans dépendance).
 
 ---
 
@@ -106,7 +106,7 @@ Prix d'un serveur, par ordre de priorité :
 3. Sinon `taux de base × multiplicateur du serveur` (`serverRates`) × ajustement.
 
 **Ajustement manager** (`adjustments[serveur][sens]`, en %) : `/rate ajuster <sens> <serveurs> <%>`,
-serveurs = `tous`, un jeu (`dofus`, `touch`, `retro`, `wakfu`) ou une liste `drac, ombre`.
+serveurs = `tous` ou une liste `drac, ombre`.
 Borné à ±50 %, `0` le retire, ne s'applique pas à un prix fixé à la main.
 
 **Garde-fou de marge** : ce qu'on paie (vente) ne dépasse jamais notre prix de vente − 5 %
@@ -120,7 +120,7 @@ et seulement si le dernier relevé a moins de 6 h. Jamais de comparaison défavo
 `/rate auto`) est réservée au **manager** (administrateur ou rôle Manager / `MANAGER_ROLE_ID`).
 Le staff peut consulter `/rate auto` sans option.
 
-Les autres devises sont converties avec le ratio des taux de base (ex. USD/EUR de `rates`).
+Le prix en DH est converti avec le ratio des taux de base (MAD/EUR de `rates`).
 `/rate prix <serveur> <sens> 0` supprime le prix manuel et rend la main au prix web.
 
 ### Prix web automatiques (`src/price-feed.js`)
@@ -181,7 +181,8 @@ Les custom IDs sont au format `scope:action:arg1:arg2` — **c'est la source du 
 
 ### Devises et sens
 
-- Devises : EUR, USD, GBP, MAD, USDT (affichage FR : `1,35 €/M`).
+- Devises affichées : **EUR et MAD (DH) uniquement** (affichage FR : `1,35 €/M`).
+- **Dofus 3 uniquement** : pas de serveurs Touch / Retro / Wakfu. Le relevé web reconnaît encore ces jeux chez les concurrents, uniquement pour les ignorer.
 - Sens : `buy` (on vend au client), `sell` (on achète au client), `exchange` (inter-serveurs, -10 % ≥ 100 M).
 - Remise échange automatique de 10 % pour les lots ≥ 100 M (`quote()`).
 
@@ -265,7 +266,6 @@ Developer Portal → Reset Token, remplacer dans Render + `.env`, supprimer `~/D
 - [ ] **Régénérer le token Discord** (fuité) — voir §5.
 - [x] Prix réels par serveur relevés automatiquement sur le web (`src/price-feed.js`).
 - [ ] **Valider les pourcentages** (97 % / 103 % / 45 %) et la marge minimale de 5 % avec le propriétaire.
-- [ ] Rubilax (Wakfu) et Talok (Touch) n'ont qu'une seule source de prix de vente : surveiller `/rate auto`.
 - [ ] Marges faibles quand le rachat ≈ la vente (ex. Mikhal 0,66 / 0,67) : le garde-fou 🛡️ plafonne à -5 % ; décider si on accepte de ne pas battre LesKamas là-bas.
 - [x] Panneaux mis à jour automatiquement (édition des messages existants au démarrage et à chaque changement).
 - [ ] Vérifier le cron cron-job.org pointe bien sur `https://commis-57du.onrender.com/healthz`.
@@ -283,7 +283,7 @@ Idées en attente :
 
 ```sh
 # Local
-npm test                    # 45 tests
+npm test                    # 46 tests
 npm run check               # diagnostic complet (permissions, hiérarchie, inventaire)
 npm run setup:dry           # aperçu du setup sans rien créer
 npm run setup               # crée ce qui manque (idempotent)
