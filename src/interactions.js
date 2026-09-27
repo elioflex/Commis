@@ -1,6 +1,6 @@
 import { AttachmentBuilder } from "discord.js";
 
-import { CURRENCY_CODES, TICKET_TYPES, paymentByCode, serverByCode } from "../config.js";
+import { CURRENCY_CODES, TICKET_TYPES, paymentByCode, serverByCode, serverLabel } from "../config.js";
 import {
     closeReason,
     closeReasonRow,
@@ -17,7 +17,17 @@ import {
 } from "./components.js";
 import { baseEmbed, errorEmbed, infoEmbed, successEmbed } from "./embeds.js";
 import { isStaff } from "./guild-utils.js";
-import { parseMillions, effectiveRate, formatMoney, formatMillions, quote } from "./market.js";
+import { refreshMarketDisplays } from "./live-board.js";
+import {
+    parseMillions,
+    effectiveRate,
+    formatMoney,
+    formatMillions,
+    parsePriceTable,
+    quote,
+    serverPriceSummary,
+    setServerPrice,
+} from "./market.js";
 
 import { update } from "./store.js";
 import { buildTranscript } from "./transcript.js";
@@ -271,13 +281,13 @@ async function handleSelect(interaction) {
         const type = TICKET_TYPES[typeId];
         if (!type) return respond(interaction, { embeds: [errorEmbed("Type de ticket inconnu.")] });
 
-        const label = serverByCode(serverCode)?.name ?? serverCode;
+        const label = serverLabel(serverByCode(serverCode)) || serverCode;
         const kind = typeId === "achat" ? "buy" : typeId === "vente" ? "sell" : "exchange";
         const rate = effectiveRate("EUR", kind, serverCode);
         const priceLine =
             rate === null
                 ? "Taux : à confirmer avec le staff"
-                : `Prix sur ce serveur : **${formatMoney(rate, "EUR")}/M**`;
+                : `Prix sur ce serveur (par M) : **${serverPriceSummary(kind, serverCode)}**`;
 
         if (!type.needsPayment) {
             return interaction.update({
@@ -306,7 +316,7 @@ async function handleSelect(interaction) {
                     .setTitle(`${type.emoji}  Récapitulatif`)
                     .setDescription(
                         [
-                            `**Serveur Dofus :** ${serverByCode(serverCode)?.name ?? serverCode}`,
+                            `**Serveur Dofus :** ${serverLabel(serverByCode(serverCode)) || serverCode}`,
                             `**Paiement :** ${paymentLabel.emoji} ${paymentLabel.label}`,
                             `**Taux sur ce serveur (EUR) :** ${rate === null ? "à confirmer avec le staff" : `${formatMoney(rate, "EUR")}/M`}`,
                             "",
@@ -388,6 +398,42 @@ async function handleModal(client, interaction) {
     if (scope === "modal" && rest[0] === "simple") {
         const typeId = rest[1];
         return createTicketFromModal(interaction, typeId, null, null);
+    }
+
+    if (scope === "modal" && rest[0] === "prices") {
+        if (!(await needStaff(interaction))) return undefined;
+        const { updates, errors } = parsePriceTable(interaction.fields.getTextInputValue("table"));
+
+        // All-or-nothing: a typo must not leave half the servers updated.
+        if (errors.length) {
+            return respond(interaction, {
+                embeds: [
+                    errorEmbed(
+                        `${errors.slice(0, 15).join("\n")}${errors.length > 15 ? `\n… et ${errors.length - 15} autre(s)` : ""}\n\nAucun prix n'a été modifié.`,
+                        "❌ Tableau non enregistré",
+                    ),
+                ],
+            });
+        }
+
+        let changed = 0;
+        for (const { serverCode, kind, price } of updates) {
+            if (effectiveRate("EUR", kind, serverCode) === Math.round(price * 1000) / 1000) continue;
+            setServerPrice(serverCode, kind, price);
+            changed += 1;
+        }
+        if (changed) refreshMarketDisplays(client);
+
+        return respond(interaction, {
+            embeds: [
+                successEmbed(
+                    changed
+                        ? `**${changed}** prix modifié(s). Panneaux et 📈・taux-du-jour mis à jour dans quelques secondes.`
+                        : "Aucun changement.",
+                    "🖥️ Prix par serveur",
+                ),
+            ],
+        });
     }
 
     if (scope === "modal" && rest[0] === "rename") {
@@ -511,7 +557,7 @@ async function createTicketFromModal(interaction, typeId, serverCode, paymentCod
     const { ticket, channel } = result;
     const summary =
         type.needsQuantity && payload.millions
-            ? `\n**${formatMillions(payload.millions)}** • ${payload.currency} • ${serverByCode(serverCode)?.name ?? ""}` +
+            ? `\n**${formatMillions(payload.millions)}** • ${payload.currency} • ${serverLabel(serverByCode(serverCode))}` +
               (payload.totalPreview ? `\nTotal estimé : **${formatMoney(payload.totalPreview, payload.currency)}**` : "")
             : "";
 

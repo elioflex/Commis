@@ -9,7 +9,7 @@ import {
     UserSelectMenuBuilder,
 } from "discord.js";
 
-import { CURRENCIES, DOFUS_SERVERS, PAYMENT_METHODS, TICKET_STAGES, TICKET_TYPES } from "../config.js";
+import { CURRENCIES, DOFUS_SERVERS, PAYMENT_METHODS, TICKET_STAGES, TICKET_TYPES, serverLabel } from "../config.js";
 
 export const CLOSE_REASONS = [
     { code: "livre", label: "✅ Commande livrée", emoji: "✅" },
@@ -131,7 +131,7 @@ export function serverSelectRow(typeId) {
             .setCustomId(`flow:srv:${typeId}`)
             .setPlaceholder("🌍 Sur quel serveur Dofus ?")
             .addOptions(
-                DOFUS_SERVERS.slice(0, 25).map((server) => ({ label: server.name, value: server.code })),
+                DOFUS_SERVERS.slice(0, 25).map((server) => ({ label: serverLabel(server), value: server.code })),
             ),
     );
 }
@@ -217,6 +217,24 @@ export function marketModal(typeId, serverCode, paymentCode) {
     ];
 
     return modal.addComponents(...rows);
+}
+
+/** `/rate tableau`: every server's EUR prices in one editable text box. */
+export function priceTableModal(table) {
+    return new ModalBuilder()
+        .setCustomId("modal:prices")
+        .setTitle("Prix par serveur (EUR / M)")
+        .addComponents(
+            textRow(
+                new TextInputBuilder()
+                    .setCustomId("table")
+                    .setLabel("Serveur : achat / vente / échange")
+                    .setStyle(TextInputStyle.Paragraph)
+                    .setRequired(true)
+                    .setMaxLength(4000)
+                    .setValue(String(table).slice(0, 4000)),
+            ),
+        );
 }
 
 export function simpleModal(typeId) {

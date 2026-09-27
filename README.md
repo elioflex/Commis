@@ -176,7 +176,10 @@ modale (sujet, détails, référence de commande).
 | `/ticket transcript` | Client ou staff | Génère la transcription |
 | `/ticket stats` | Staff | Nombre de tickets ouverts / fermés, par type |
 | `/rate voir` | Tous | Affiche tous les taux |
-| `/rate set <devise> <sens> <prix>` | Staff | Définit un taux (achat client / vente client / échange) |
+| `/rate set <devise> <sens> <prix>` | Staff | Définit un taux de base (achat client / vente client / échange) |
+| `/rate prix <serveur> <sens> <prix>` | Staff | Fixe le prix réel d'un serveur en EUR/M (0 = revenir au prix web / taux de base) |
+| `/rate tableau` | Staff | Modifie les prix de tous les serveurs dans un seul formulaire |
+| `/rate auto [actif] [achat] [vente] [echange] [actualiser]` | Staff | Prix web automatiques : état par serveur, pause, pourcentages du prix du marché, relevé immédiat |
 | `/stock voir` | Tous | Affiche le stock par serveur Dofus |
 | `/stock set <serveur> <millions> [statut]` | Staff | Met à jour le stock (statut auto : `open` &gt; 100 M, `low`, `full` à 0) |
 | `/avis` | Tous | Publie un avis dans le salon `⭐・avis-clients` |

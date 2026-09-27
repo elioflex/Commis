@@ -57,6 +57,9 @@ export const SETTINGS = {
     setupStepDelayMs: int("SETUP_STEP_DELAY_MS", 1500),
 
     /* ── state mirror (see src/persist.js) ── */
+    // Automatic prices read from public kamas shops (see src/price-feed.js).
+    priceFeed: str("PRICE_FEED", "on") === "off" ? "off" : "on",
+    priceFeedIntervalMin: Math.max(10, int("PRICE_FEED_INTERVAL_MIN", 30)),
     // Channel that holds the state snapshot; /setup creates « ⚙️・gestion » for it.
     stateChannelId: snowflake("STATE_CHANNEL_ID"),
     stateMirror: str("STATE_MIRROR", "on") === "off" ? "off" : "on",
@@ -80,33 +83,49 @@ export const CURRENCY_CODES = CURRENCIES.map((c) => c.code);
 export const currencyInfo = (code) =>
     CURRENCIES.find((c) => c.code === code.toUpperCase()) ?? { code, label: code, symbol: "" };
 
-/** Dofus servers you trade on. `code` is used in custom ids, so keep it short. */
+/**
+ * Dofus servers you trade on. `code` is used in custom ids, so keep it short.
+ * `game` matters for the automatic price feed: a Touch or Retro server with the
+ * same name as a Dofus 3 one is a different market with a different price.
+ * `aliases` are extra spellings used by the sites the feed reads.
+ */
+export const GAMES = {
+    dofus: { label: "Dofus 3", short: null },
+    touch: { label: "Dofus Touch", short: "Touch" },
+    retro: { label: "Dofus Retro", short: "Retro" },
+    wakfu: { label: "Wakfu", short: "Wakfu" },
+};
+
 export const DOFUS_SERVERS = [
-    { code: "drac", name: "Draconiros" },
-    { code: "tylezia", name: "Tylezia" },
-    { code: "orukam", name: "Orukam" },
-    { code: "imagiro", name: "Imagiro" },
-    { code: "talkasha", name: "Talkasha" },
-    { code: "ombre", name: "Ombre" },
-    { code: "dakal", name: "Dakal" },
-    { code: "mikhal", name: "Mikhal" },
-    { code: "kourial", name: "Kourial" },
-    { code: "rafal", name: "Rafal" },
-    { code: "brial", name: "Brial" },
-    { code: "salar", name: "Salar" },
-    { code: "boune", name: "Boune" },
-    { code: "fallanster", name: "Fallanster" },
-    { code: "tiliwan", name: "Tiliwan" },
-    { code: "kelerog", name: "Kelerog" },
-    { code: "blair", name: "Blair" },
-    { code: "talok", name: "Talok" },
-    { code: "hellmina", name: "Hellmina" },
-    { code: "allisteria", name: "Allisteria" },
-    { code: "rubilax", name: "Rubilax" },
-    { code: "pandora", name: "Pandora" },
-    { code: "ogrest", name: "Ogrest" },
-    { code: "autre", name: "Autre / mono-compte" },
+    { code: "drac", name: "Draconiros", game: "dofus" },
+    { code: "tylezia", name: "Tylezia", game: "dofus" },
+    { code: "orukam", name: "Orukam", game: "dofus" },
+    { code: "imagiro", name: "Imagiro", game: "dofus" },
+    { code: "talkasha", name: "Talkasha", game: "dofus", aliases: ["Tal kasha"] },
+    { code: "ombre", name: "Ombre", game: "dofus", aliases: ["Ombre - Shadow", "Ombre (Shadow)", "Shadow"] },
+    { code: "dakal", name: "Dakal", game: "dofus" },
+    { code: "mikhal", name: "Mikhal", game: "dofus" },
+    { code: "kourial", name: "Kourial", game: "dofus" },
+    { code: "rafal", name: "Rafal", game: "dofus" },
+    { code: "brial", name: "Brial", game: "dofus" },
+    { code: "salar", name: "Salar", game: "dofus" },
+    { code: "boune", name: "Boune", game: "retro" },
+    { code: "fallanster", name: "Fallanster", game: "retro" },
+    { code: "tiliwan", name: "Tiliwan", game: "touch" },
+    { code: "kelerog", name: "Kelerog", game: "touch" },
+    { code: "blair", name: "Blair", game: "touch" },
+    { code: "talok", name: "Talok", game: "touch" },
+    { code: "hellmina", name: "Hellmina", game: "dofus" },
+    { code: "allisteria", name: "Allisteria", game: "retro" },
+    { code: "rubilax", name: "Rubilax", game: "wakfu" },
+    { code: "pandora", name: "Pandora", game: "wakfu" },
+    { code: "ogrest", name: "Ogrest", game: "wakfu" },
+    { code: "autre", name: "Autre / mono-compte", game: null },
 ];
+
+/** "Kelerog (Touch)" for non-Dofus-3 servers, plain name otherwise. */
+export const serverLabel = (server) =>
+    server?.game && GAMES[server.game]?.short ? `${server.name} (${GAMES[server.game].short})` : server?.name ?? "";
 
 export const serverByCode = (code) => DOFUS_SERVERS.find((s) => s.code === code) ?? null;
 export const serverByName = (name) =>

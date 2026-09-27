@@ -5,7 +5,9 @@ import { ActivityType, Client, Events, GatewayIntentBits, Partials } from "disco
 import { BRAND, SETTINGS } from "../config.js";
 import { startHealthServer } from "./health.js";
 import { handleInteraction } from "./interactions.js";
+import { refreshMarketDisplaysNow } from "./live-board.js";
 import { mirrorStateNow, restoreState, scheduleStateMirror, stateMirrorStatus } from "./persist.js";
+import { startPriceFeed } from "./price-feed.js";
 import { read, setWriteHook } from "./store.js";
 import { ticketStats } from "./tickets.js";
 
@@ -67,6 +69,14 @@ client.once(Events.ClientReady, async (readyClient) => {
 
     // Warm the caches so the first ticket creation is instant.
     read("tickets.json");
+
+    // Panels posted by an older build (or before the snapshot was restored)
+    // pick up the current prices, and the 📈・taux-du-jour board is created.
+    const refreshed = await refreshMarketDisplaysNow(readyClient);
+    console.info(`[bot] Prix affichés : ${refreshed.panels} panneau(x), ${refreshed.board} message(s) taux-du-jour`);
+
+    // Market prices read from the web every PRICE_FEED_INTERVAL_MIN (PRICE_FEED=off to disable).
+    startPriceFeed(readyClient);
 });
 
 client.on(Events.InteractionCreate, (interaction) => {

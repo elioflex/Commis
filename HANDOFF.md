@@ -52,16 +52,18 @@ kamas-market-bot/
 ├── HANDOFF.md           ← ce document
 ├── .env                 ← secrets, JAMAIS versionné (token Discord, IDs)
 ├── data/                ← état runtime, JSON, éditable à la main
-│   ├── market.json      ← taux de base + serverRates (multiplicateurs par serveur) + stock
+│   ├── market.json      ← taux de base + serverPrices (prix fixés EUR) + serverRates (multiplicateurs) + stock
 │   ├── tickets.json     ← tickets ouverts/fermés, compteur
 │   ├── reviews.json     ← avis clients
-│   └── panels.json      ← mapping panneau → message Discord publié
+│   └── panels.json      ← mapping panneau → message Discord publié + board (📈・taux-du-jour)
 ├── src/
 │   ├── index.js         ← entry point : login Discord + health server + state mirror
 │   ├── interactions.js  ← ROUTEUR : boutons / menus / modales / user-selects
 │   ├── commands.js      ← slash commands : /panel /ticket /rate /stock /avis /check /setup /help
 │   ├── tickets.js       ← cycle de vie d'un ticket (création, claim, étapes, fermeture)
 │   ├── market.js        ← taux, stock, PRIX PAR SERVEUR, calcul des totaux, formatage FR
+│   ├── live-board.js    ← met à jour panneaux + 📈・taux-du-jour après chaque changement de prix/stock
+│   ├── price-feed.js    ← PRIX WEB : relève kamasv.com + 1kamas.com toutes les 30 min
 │   ├── embeds.js        ← tous les embeds Discord
 │   ├── components.js    ← boutons, menus, modales (builders)
 │   ├── persist.js       ← MIROIR D'ÉTAT : sauvegarde data/ dans Discord (salon ⚙️・gestion)
@@ -75,10 +77,13 @@ kamas-market-bot/
 └── test/
     ├── smoke.test.mjs     ← 13 tests (marché, composants, setup, prix par serveur)
     ├── preflight.test.mjs ← 7 tests (diagnostic, permissions, rôles paiement)
-    └── hosting.test.mjs   ← 8 tests (health server, miroir d'état, DATA_DIR)
+    ├── hosting.test.mjs   ← 8 tests (health server, miroir d'état, DATA_DIR)
+    ├── pricing.test.mjs   ← 5 tests (prix fixés, tableau, limites des embeds)
+    ├── price-feed.test.mjs ← 6 tests (lecture des boutiques, garde-fou, priorité des prix)
+    └── setup.mjs          ← chaque process de test travaille sur une copie temporaire de data/
 ```
 
-**29 tests au total** — `npm test` (node:test, sans dépendance).
+**40 tests au total** — `npm test` (node:test, sans dépendance).
 
 ---
 
@@ -86,7 +91,38 @@ kamas-market-bot/
 
 ### Prix par serveur
 
-Le prix réel = `taux de base × multiplicateur du serveur` (`serverRates` dans `market.json`).
+Prix d'un serveur, par ordre de priorité :
+
+1. **Prix fixé par le staff** (`serverPrices[serveur][sens]`, en EUR/M) — `/rate prix` ou `/rate tableau`.
+2. Sinon **prix web** : prix du marché × pourcentage du sens (`feed.factors`, par défaut
+   achat 100 %, vente 70 %, échange 45 %), arrondi au centime — voir ci-dessous.
+3. Sinon `taux de base × multiplicateur du serveur` (`serverRates`).
+
+Les autres devises sont converties avec le ratio des taux de base (ex. USD/EUR de `rates`).
+`/rate prix <serveur> <sens> 0` supprime le prix manuel et rend la main au prix web.
+
+### Prix web automatiques (`src/price-feed.js`)
+
+Toutes les `PRICE_FEED_INTERVAL_MIN` minutes (30 par défaut, minimum 10), le bot lit l'API publique
+WooCommerce (`/wp-json/wc/store/v1/`) de deux boutiques concurrentes :
+
+- **kamasv.com** : un produit par lot (« 10M Kamas Draconiros ») ; le jeu vient de la catégorie racine
+  (DOFUS, DOFUS TOUCH, DOFUS RETRO, WAKFU). Prix/M = médiane des lots en stock.
+- **1kamas.com** : un produit variable par jeu, une variation par serveur (prix déjà au million).
+
+Correspondance par nom normalisé + `aliases` de `config.js`, **uniquement dans le même jeu**
+(chaque serveur a un `game`) ; les serveurs saisonniers (Temporis, saisonniers) sont ignorés.
+Référence = médiane des boutiques, stockée dans `market.json` → `feed.reference`.
+
+Garde-fous : un prix qui bouge de plus de 50 % est mis en attente (`feed.pending`) et n'est accepté
+que s'il est confirmé au relevé suivant ; une boutique en panne garde les derniers prix connus
+(erreur visible dans `feed.lastError` et `/rate auto`). Si un prix change, panneaux et
+📈・taux-du-jour sont mis à jour. `PRICE_FEED=off` désactive le relevé ; `/rate auto actif:False`
+met les prix web en pause sans redéployer.
+
+Chaque changement (`/rate`, `/stock`, `/rate tableau`) met à jour **automatiquement** les 3 panneaux
+marché (édition du message existant) et les 3 messages de `📈・taux-du-jour` (`src/live-board.js`,
+regroupés sur 2 s). Au démarrage, le bot rafraîchit aussi tout. Les panneaux affichent les 5 devises.
 
 ```js
 // src/market.js
@@ -197,16 +233,15 @@ Developer Portal → Reset Token, remplacer dans Render + `.env`, supprimer `~/D
 À faire (par ordre de priorité) :
 
 - [ ] **Régénérer le token Discord** (fuité) — voir §5.
-- [ ] **Configurer les vrais prix** : les multiplicateurs actuels sont un seed arbitraire réaliste.
-      Demander les prix réels par serveur au propriétaire, puis `/rate serveur` pour chacun.
-- [ ] **Reposter les 5 panneaux** pour qu'ils affichent les prix par serveur (éditer les messages
-      existants via `data/panels.json`, pas de doublons).
+- [x] Prix réels par serveur relevés automatiquement sur le web (`src/price-feed.js`).
+- [ ] **Valider les pourcentages** achat / vente / échange avec le propriétaire (`/rate auto`).
+- [ ] Rubilax (Wakfu) et Talok (Touch) n'ont qu'une seule source : surveiller `/rate auto`.
+- [x] Panneaux mis à jour automatiquement (édition des messages existants au démarrage et à chaque changement).
 - [ ] Vérifier le cron cron-job.org pointe bien sur `https://commis-57du.onrender.com/healthz`.
 - [ ] Tester le flux d'achat complet après redéploiement (serveur → paiement → formulaire → salon).
 
 Idées en attente :
 
-- Tableau des taux auto-rafraîchi dans `📈・taux-du-jour` (salon créé mais vide).
 - Test d'intégration simulant le routeur d'interactions avec de faux objets Discord.
 - Fermeture type « escrow » : refuser de clôturer « livrée » sans confirmation du client.
 - Version client du guide (1 page, sans infos techniques).
@@ -217,7 +252,7 @@ Idées en attente :
 
 ```sh
 # Local
-npm test                    # 29 tests
+npm test                    # 40 tests
 npm run check               # diagnostic complet (permissions, hiérarchie, inventaire)
 npm run setup:dry           # aperçu du setup sans rien créer
 npm run setup               # crée ce qui manque (idempotent)

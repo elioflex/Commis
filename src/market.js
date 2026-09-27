@@ -1,4 +1,4 @@
-import { CURRENCIES, currencyInfo, DOFUS_SERVERS, serverByCode } from "../config.js";
+import { CURRENCIES, currencyInfo, DOFUS_SERVERS, serverByCode, serverByName, serverLabel } from "../config.js";
 import { read, setPath, deletePath } from "./store.js";
 
 export const STOCK_STATUS = {
@@ -35,9 +35,11 @@ export function setServerMultiplier(serverCode, value) {
     const parsed = typeof value === "number" ? value : Number.parseFloat(value);
     if (!Number.isFinite(parsed) || parsed <= 0) {
         deletePath("market.json", `serverRates.${serverCode}`);
+        setRatesUpdated();
         return 1;
     }
     setPath("market.json", `serverRates.${serverCode}`, Math.round(parsed * 1000) / 1000);
+    setRatesUpdated();
     return parsed;
 }
 
@@ -45,16 +47,124 @@ export function serverMultipliers() {
     return read("market.json").serverRates ?? {};
 }
 
-/** The price actually charged: base rate × server multiplier. */
+/**
+ * Fixed EUR price per million set by staff for one server and one kind, stored
+ * in market.json as `serverPrices[code][kind]`. `null` when not set.
+ */
+export function serverPrice(serverCode, kind) {
+    const raw = read("market.json").serverPrices?.[serverCode]?.[kind];
+    const value = typeof raw === "number" ? raw : Number(raw);
+    return raw != null && Number.isFinite(value) && value > 0 ? value : null;
+}
+
+/** Staff-facing setter. Pass null (or 0) to go back to base rate × multiplier. */
+export function setServerPrice(serverCode, kind, value) {
+    const parsed = typeof value === "number" ? value : Number.parseFloat(String(value ?? "").replace(",", "."));
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+        deletePath("market.json", `serverPrices.${serverCode}.${kind}`);
+        setRatesUpdated();
+        return null;
+    }
+    const rounded = Math.round(parsed * 1000) / 1000;
+    setPath("market.json", `serverPrices.${serverCode}.${kind}`, rounded);
+    setRatesUpdated();
+    return rounded;
+}
+
+/* ───────────── automatic prices (filled by src/price-feed.js) ───────────── */
+
+/** Our price as a share of the market price, per kind. Staff change it with `/rate auto`. */
+export const DEFAULT_FEED_FACTORS = { buy: 1, sell: 0.7, exchange: 0.45 };
+
+export const feedState = () => read("market.json").feed ?? {};
+
+export const feedEnabled = () => feedState().enabled !== false;
+
+export function feedFactors() {
+    return { ...DEFAULT_FEED_FACTORS, ...(feedState().factors ?? {}) };
+}
+
+export function setFeedEnabled(enabled) {
+    setPath("market.json", "feed.enabled", Boolean(enabled));
+    setRatesUpdated();
+    return Boolean(enabled);
+}
+
+/** `factors` = { buy?, sell?, exchange? } as shares (0.7 = 70 % of the market price). */
+export function setFeedFactors(factors) {
+    for (const kind of RATE_KINDS) {
+        const value = factors?.[kind];
+        if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+            setPath("market.json", `feed.factors.${kind}`, Math.round(value * 1000) / 1000);
+        }
+    }
+    setRatesUpdated();
+    return feedFactors();
+}
+
+/** Market reference in EUR/M (median of the shops read by the feed), or null. */
+export function marketReference(serverCode) {
+    const value = feedState().reference?.[serverCode]?.eur;
+    return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : null;
+}
+
+/** Automatic EUR price: market reference × our factor for this kind, rounded to the cent. */
+export function autoPrice(serverCode, kind) {
+    if (!feedEnabled()) return null;
+    const reference = marketReference(serverCode);
+    const factor = feedFactors()[kind];
+    if (reference === null || !(factor > 0)) return null;
+    return Math.max(0.01, Math.round(reference * factor * 100) / 100);
+}
+
+/** Where a server's price comes from: "manuel" (pinned by staff), "auto" (web) or "base". */
+export function priceSource(serverCode, kind) {
+    if (serverPrice(serverCode, kind) !== null) return "manuel";
+    if (autoPrice(serverCode, kind) !== null) return "auto";
+    return "base";
+}
+
+/**
+ * How many units of `currency` one euro is worth for this kind, taken from the
+ * base rate table (so the owner's own spread per currency is kept).
+ */
+function currencyRatio(currency, kind) {
+    const code = String(currency).toUpperCase();
+    if (code === "EUR") return 1;
+    const eur = rateFor("EUR", kind);
+    const other = rateFor(code, kind);
+    return eur && other ? other / eur : null;
+}
+
+/**
+ * The price actually charged, in order: a price pinned by staff, the automatic
+ * web price, then base rate × multiplier. EUR prices are converted to other
+ * currencies with the base-rate ratio, so the owner's spread per currency holds.
+ */
 export function effectiveRate(currency, kind, serverCode) {
+    const fixed = serverCode ? serverPrice(serverCode, kind) ?? autoPrice(serverCode, kind) : null;
+    if (fixed !== null) {
+        const ratio = currencyRatio(currency, kind);
+        return ratio === null ? null : Math.round(fixed * ratio * 1000) / 1000;
+    }
     const base = rateFor(currency, kind);
     if (base === null) return null;
     return Math.round(base * serverMultiplier(serverCode) * 1000) / 1000;
 }
 
+/** "1,55 € · 1,67 $ · 1,32 £ · 16,68 DH · 1,73 ₮" for one server and kind. */
+export function serverPriceSummary(kind, serverCode) {
+    const cells = CURRENCIES.map((currency) => {
+        const rate = effectiveRate(currency.code, kind, serverCode);
+        return rate === null ? null : formatMoney(rate, currency.code);
+    }).filter(Boolean);
+    return cells.length ? cells.join(" · ") : "à confirmer";
+}
+
 export function setRate(currency, kind, value) {
     const code = String(currency).toUpperCase();
     setPath("market.json", `rates.${code}.${kind}`, value);
+    setRatesUpdated();
     return value;
 }
 
@@ -127,40 +237,113 @@ export function parseMillions(input) {
 }
 
 /**
- * One line per Dofus server: its price for this kind, computed from the base
- * rate and its own multiplier. Sorted by price, cheapest first.
+ * Two lines per Dofus server: name (+ stock for buy/exchange), then its price
+ * in every currency. Buy/exchange: in-stock servers first, cheapest first.
+ * Sell: best payout first.
  */
-export function serverRateLines(currency, kind) {
-    const base = rateFor(currency, kind);
-    if (base === null) return ["_Aucun taux de base configuré. Staff : `/rate set`._"];
+export function serverRateLines(kind) {
+    if (rateFor("EUR", kind) === null && !DOFUS_SERVERS.some((s) => effectiveRate("EUR", kind, s.code) !== null)) {
+        return ["_Aucun prix configuré. Staff : `/rate tableau`._"];
+    }
 
-    const { code, symbol } = currencyInfo(currency);
-    const rows = DOFUS_SERVERS.map((server) => {
-        const multiplier = serverMultiplier(server.code);
-        const price = Math.round(base * multiplier * 1000) / 1000;
-        return { name: server.name, multiplier, price, stock: stockFor(server.code) };
-    }).sort((a, b) => a.price - b.price || a.name.localeCompare(b.name));
+    const showStock = kind !== "sell";
+    const rows = DOFUS_SERVERS.map((server) => ({
+        name: serverLabel(server),
+        price: effectiveRate("EUR", kind, server.code) ?? Number.POSITIVE_INFINITY,
+        summary: serverPriceSummary(kind, server.code),
+        stock: stockFor(server.code),
+    }));
 
-    const lines = rows.map(({ name, price, stock }) => {
-        const marker = stock.status === "open" ? "🟢" : stock.status === "low" ? "🟡" : "🔴";
-        const priceText = symbol ? `${price.toLocaleString("fr-FR")} ${symbol}` : `${price.toLocaleString("fr-FR")} ${code}`;
-        return `${marker} **${name}** — ${priceText}/M`;
+    rows.sort((a, b) => {
+        if (showStock) {
+            const aFull = a.stock.status === "full" ? 1 : 0;
+            const bFull = b.stock.status === "full" ? 1 : 0;
+            if (aFull !== bFull) return aFull - bFull;
+            return a.price - b.price || a.name.localeCompare(b.name);
+        }
+        return b.price - a.price || a.name.localeCompare(b.name);
     });
 
-    return lines.length ? lines : ["_Aucun serveur configuré._"];
+    return rows.map(({ name, summary, stock }) => {
+        if (!showStock) return `**${name}**\n└ ${summary}`;
+        const marker = stock.status === "open" ? "🟢" : stock.status === "low" ? "🟡" : "🔴";
+        const stockText = stock.status === "full" ? "complet" : formatMillions(stock.millions);
+        return `${marker} **${name}** · ${stockText}\n└ ${summary}`;
+    });
+}
+
+/** Discord caps a field value at 1024 characters: pack lines into as many fields as needed. */
+export function serverRateFields(kind) {
+    const chunks = [];
+    let current = [];
+    let length = 0;
+    for (const line of serverRateLines(kind)) {
+        if (current.length && length + line.length + 1 > 1024) {
+            chunks.push(current);
+            current = [];
+            length = 0;
+        }
+        current.push(line);
+        length += line.length + 1;
+    }
+    if (current.length) chunks.push(current);
+
+    return chunks.map((lines, index) => ({
+        name: chunks.length > 1 ? `🖥️ Prix par serveur (${index + 1}/${chunks.length})` : "🖥️ Prix par serveur",
+        value: lines.join("\n"),
+        inline: false,
+    }));
+}
+
+/** "Draconiros : 1,55 / 1,10 / 0,70" — the bulk editor shown in `/rate tableau`. */
+export function formatPriceTable() {
+    const cell = (code, kind) => {
+        const value = effectiveRate("EUR", kind, code);
+        return value === null ? "-" : value.toLocaleString("fr-FR", { maximumFractionDigits: 3 });
+    };
+    return DOFUS_SERVERS.map(
+        (server) => `${server.name} : ${cell(server.code, "buy")} / ${cell(server.code, "sell")} / ${cell(server.code, "exchange")}`,
+    ).join("\n");
 }
 
 /**
- * Discord embeds cap descriptions at 4096 characters; 24 servers × ~60 chars
- * fits comfortably, but guard anyway by splitting into two fields.
+ * Parse the bulk editor. One line per server: `Nom : achat / vente / échange`
+ * (EUR per million). `-` leaves that price untouched.
  */
-export function serverRateFields(currency, kind) {
-    const lines = serverRateLines(currency, kind);
-    const mid = Math.ceil(lines.length / 2);
-    return [
-        { name: "🖥️ Serveurs (1/2)", value: lines.slice(0, mid).join("\n"), inline: false },
-        { name: "🖥️ Serveurs (2/2)", value: lines.slice(mid).join("\n") || "—", inline: false },
-    ];
+export function parsePriceTable(text) {
+    const updates = [];
+    const errors = [];
+    const kinds = ["buy", "sell", "exchange"];
+
+    for (const [index, rawLine] of String(text ?? "").split(/\r?\n/).entries()) {
+        const line = rawLine.trim();
+        if (!line) continue;
+
+        const match = line.match(/^(.+?)\s*:\s*(.+)$/);
+        const server = match && (serverByName(match[1].trim()) ?? serverByCode(match[1].trim().toLowerCase()));
+        if (!server) {
+            errors.push(`Ligne ${index + 1} : serveur inconnu (« ${line.slice(0, 40)} »)`);
+            continue;
+        }
+
+        const cells = match[2].split("/").map((cell) => cell.trim());
+        if (cells.length !== 3) {
+            errors.push(`Ligne ${index + 1} : il faut 3 prix (achat / vente / échange) pour ${server.name}`);
+            continue;
+        }
+
+        cells.forEach((cell, position) => {
+            if (cell === "-" || cell === "") return;
+            const value = Number.parseFloat(cell.replace(",", "."));
+            if (!Number.isFinite(value) || value <= 0 || !/^\d+(?:[.,]\d+)?$/.test(cell)) {
+                errors.push(`Ligne ${index + 1} : prix invalide « ${cell} » pour ${server.name}`);
+                return;
+            }
+            updates.push({ serverCode: server.code, kind: kinds[position], price: value });
+        });
+    }
+
+    return { updates, errors };
 }
 
 /** Lines describing the current rate table, per currency. */
@@ -189,7 +372,7 @@ export function stockLines({ onlyAvailable = false } = {}) {
         const { millions, status } = stockFor(code);
         if (onlyAvailable && status === "full") continue;
         lines.push(
-            `${STOCK_STATUS[status].label} • **${info?.name ?? code}** — ${formatMillions(millions)}`,
+            `${STOCK_STATUS[status].label} • **${serverLabel(info) || code}** — ${formatMillions(millions)}`,
         );
     }
     return lines.length ? lines : ["_Aucun stock configuré. Staff : utilise `/stock set`._"];

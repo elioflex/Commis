@@ -3,24 +3,43 @@ import { AttachmentBuilder, PermissionFlagsBits, SlashCommandBuilder } from "dis
 import {
     BRAND,
     CURRENCIES,
+    SETTINGS,
     DOFUS_SERVERS,
     TICKET_STAGES,
     TICKET_TYPE_IDS,
     TICKET_TYPES,
     serverByCode,
+    serverLabel,
 } from "../config.js";
-import { panelRow, reviewModal } from "./components.js";
-import { errorEmbed, helpEmbed, infoEmbed, panelEmbed, rateEmbed, stockEmbed, successEmbed } from "./embeds.js";
+import { panelRow, priceTableModal, reviewModal } from "./components.js";
+import {
+    errorEmbed,
+    feedStatusEmbed,
+    helpEmbed,
+    infoEmbed,
+    panelEmbed,
+    rateEmbed,
+    stockEmbed,
+    successEmbed,
+} from "./embeds.js";
 import { isStaff } from "./guild-utils.js";
+import { refreshMarketDisplays } from "./live-board.js";
 import {
     effectiveRate,
     formatMillions,
     formatMoney,
+    formatPriceTable,
+    priceSource,
+    serverPriceSummary,
+    setFeedEnabled,
+    setFeedFactors,
     setRate,
     setServerMultiplier,
+    setServerPrice,
     setStock,
 } from "./market.js";
 import { checkGuild, formatChecks } from "./preflight.js";
+import { priceFeedRunning, runPriceFeed } from "./price-feed.js";
 import { setupGuild } from "./setup.js";
 import { update } from "./store.js";
 import {
@@ -148,7 +167,7 @@ export const commandData = [
                         .setName("serveur")
                         .setDescription("Serveur Dofus")
                         .setRequired(true)
-                        .addChoices(...DOFUS_SERVERS.map((server) => ({ name: server.name, value: server.code }))),
+                        .addChoices(...DOFUS_SERVERS.map((server) => ({ name: serverLabel(server), value: server.code }))),
                 )
                 .addNumberOption((option) =>
                     option
@@ -157,6 +176,67 @@ export const commandData = [
                         .setRequired(true)
                         .setMinValue(0.1)
                         .setMaxValue(5),
+                ),
+        )
+        .addSubcommand((sub) =>
+            sub
+                .setName("prix")
+                .setDescription("Fixer le prix réel d'un serveur en EUR/M (staff)")
+                .addStringOption((option) =>
+                    option
+                        .setName("serveur")
+                        .setDescription("Serveur Dofus")
+                        .setRequired(true)
+                        .addChoices(...DOFUS_SERVERS.map((server) => ({ name: serverLabel(server), value: server.code }))),
+                )
+                .addStringOption((option) =>
+                    option
+                        .setName("sens")
+                        .setDescription("Type de prix")
+                        .setRequired(true)
+                        .addChoices(...RATE_KIND_CHOICES),
+                )
+                .addNumberOption((option) =>
+                    option
+                        .setName("prix")
+                        .setDescription("Prix en EUR par million · 0 = revenir au prix web / taux de base")
+                        .setRequired(true)
+                        .setMinValue(0),
+                ),
+        )
+        .addSubcommand((sub) =>
+            sub.setName("tableau").setDescription("Modifier les prix de tous les serveurs d'un coup (staff)"),
+        )
+        .addSubcommand((sub) =>
+            sub
+                .setName("auto")
+                .setDescription("Prix automatiques relevés sur le web : état et réglages (staff)")
+                .addBooleanOption((option) =>
+                    option.setName("actif").setDescription("Utiliser les prix web (non = retour aux taux de base)"),
+                )
+                .addIntegerOption((option) =>
+                    option
+                        .setName("achat")
+                        .setDescription("Notre prix de vente au client, en % du marché (100 = prix du marché)")
+                        .setMinValue(10)
+                        .setMaxValue(300),
+                )
+                .addIntegerOption((option) =>
+                    option
+                        .setName("vente")
+                        .setDescription("Ce qu'on paie au vendeur, en % du marché (70 = 70 %)")
+                        .setMinValue(10)
+                        .setMaxValue(300),
+                )
+                .addIntegerOption((option) =>
+                    option
+                        .setName("echange")
+                        .setDescription("Prix de l'échange inter-serveurs, en % du marché")
+                        .setMinValue(10)
+                        .setMaxValue(300),
+                )
+                .addBooleanOption((option) =>
+                    option.setName("actualiser").setDescription("Relever les prix maintenant (~30 s)"),
                 ),
         ),
 
@@ -173,7 +253,7 @@ export const commandData = [
                         .setName("serveur")
                         .setDescription("Serveur Dofus")
                         .setRequired(true)
-                        .addChoices(...DOFUS_SERVERS.map((server) => ({ name: server.name, value: server.code }))),
+                        .addChoices(...DOFUS_SERVERS.map((server) => ({ name: serverLabel(server), value: server.code }))),
                 )
                 .addNumberOption((option) =>
                     option.setName("millions").setDescription("Millions disponibles").setRequired(true).setMinValue(0),
@@ -339,11 +419,75 @@ export async function runCommand(client, interaction) {
         if (sub === "voir") return reply(interaction, { embeds: [rateEmbed()] });
         if (!(await guardStaff(interaction))) return undefined;
 
+        if (sub === "tableau") {
+            return interaction.showModal(priceTableModal(formatPriceTable()));
+        }
+
+        if (sub === "auto") {
+            await interaction.deferReply({ ephemeral: true });
+            const notes = [];
+
+            const enabled = interaction.options.getBoolean("actif");
+            if (enabled !== null) {
+                setFeedEnabled(enabled);
+                notes.push(enabled ? "✅ Prix web activés." : "⏸️ Prix web en pause — retour aux taux de base.");
+            }
+
+            const factors = {};
+            for (const [option, kind] of [["achat", "buy"], ["vente", "sell"], ["echange", "exchange"]]) {
+                const value = interaction.options.getInteger(option);
+                if (value !== null) factors[kind] = value / 100;
+            }
+            if (Object.keys(factors).length) {
+                setFeedFactors(factors);
+                notes.push("✅ Pourcentages enregistrés.");
+            }
+
+            if (interaction.options.getBoolean("actualiser")) {
+                const result = await runPriceFeed({ client });
+                notes.push(
+                    result.ok
+                        ? `🔄 Relevé terminé : ${result.changed} prix modifié(s)${result.held.length ? `, ${result.held.length} saut(s) en attente de confirmation` : ""}.`
+                        : "⚠️ Relevé impossible — les derniers prix connus sont conservés.",
+                );
+            }
+
+            if (notes.length) refreshMarketDisplays(client);
+            const status = feedStatusEmbed({ running: priceFeedRunning(), intervalMin: SETTINGS.priceFeedIntervalMin });
+            return interaction.editReply({ content: notes.join("\n") || undefined, embeds: [status] });
+        }
+
+        if (sub === "prix") {
+            const serverCode = interaction.options.getString("serveur", true);
+            const kind = interaction.options.getString("sens", true);
+            const price = interaction.options.getNumber("prix", true);
+            const applied = setServerPrice(serverCode, kind, price);
+            refreshMarketDisplays(client);
+            const name = serverLabel(serverByCode(serverCode)) || serverCode;
+
+            return reply(interaction, {
+                embeds: [
+                    successEmbed(
+                        [
+                            applied === null
+                                ? `**${name}** n'a plus de prix manuel : ${priceSource(serverCode, kind) === "auto" ? "prix web" : "taux de base × multiplicateur"}.`
+                                : `Prix **${kind}** de **${name}** : **${formatMoney(applied, "EUR")}/M**`,
+                            serverPriceSummary(kind, serverCode),
+                            "",
+                            "_Panneaux et 📈・taux-du-jour mis à jour dans quelques secondes._",
+                        ].join("\n"),
+                        "🖥️ Prix du serveur enregistré",
+                    ),
+                ],
+            });
+        }
+
         if (sub === "serveur") {
             const serverCode = interaction.options.getString("serveur", true);
             const multiplier = interaction.options.getNumber("multiplicateur", true);
             const applied = setServerMultiplier(serverCode, multiplier);
-            const name = serverByCode(serverCode)?.name ?? serverCode;
+            refreshMarketDisplays(client);
+            const name = serverLabel(serverByCode(serverCode)) || serverCode;
 
             const preview = RATE_KINDS_PREVIEW.map((kind) => {
                 const rate = effectiveRate("EUR", kind, serverCode);
@@ -370,6 +514,7 @@ export async function runCommand(client, interaction) {
         const kind = interaction.options.getString("sens", true);
         const price = interaction.options.getNumber("prix", true);
         setRate(currency, kind, price);
+        refreshMarketDisplays(client);
 
         return reply(interaction, {
             embeds: [successEmbed(`Taux **${kind}** ${currency} mis à jour : **${formatMoney(price, currency)}** / M\n\n_C'est le prix de base. Ajuste chaque serveur avec \`/rate serveur\`._`, "📈 Taux enregistré")],
@@ -386,11 +531,12 @@ export async function runCommand(client, interaction) {
         const statusOption = interaction.options.getString("statut");
         const status = statusOption ?? (millions > 100 ? "open" : millions > 0 ? "low" : "full");
         setStock(serverCode, millions, status);
+        refreshMarketDisplays(client);
 
         return reply(interaction, {
             embeds: [
                 successEmbed(
-                    `**${serverByCode(serverCode)?.name ?? serverCode}** → ${formatMillions(millions)} (${status})`,
+                    `**${serverLabel(serverByCode(serverCode)) || serverCode}** → ${formatMillions(millions)} (${status})`,
                     "📦 Stock mis à jour",
                 ),
             ],

@@ -45,6 +45,12 @@ services:
       - key: SETUP_STEP_DELAY_MS
         value: "1500"
 
+      # ── prix automatiques (kamasv.com + 1kamas.com) ──
+      - key: PRICE_FEED
+        value: on
+      - key: PRICE_FEED_INTERVAL_MIN
+        value: "30"
+
       # ── état (le disque Render est effacé à chaque redéploiement) ──
       # Le bot republie un instantané dans « ⚙️・gestion » et le réimporte au boot.
       # STATE_IMPORT=always force la réimportation même si l'état local n'est pas vide.

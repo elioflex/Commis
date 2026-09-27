@@ -9,7 +9,7 @@
   },
   "scripts": {
     "start": "node src/index.js",
-    "test": "node --test",
+    "test": "node --import ./test/setup.mjs --test test/*.test.mjs",
     "deploy": "node src/deploy-commands.js",
     "setup": "node src/scripts/setup-server.js",
     "setup:full": "node src/scripts/setup-server.js --with-payment-roles",
