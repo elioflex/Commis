@@ -1,5 +1,5 @@
 import { SETTINGS } from "../config.js";
-import { boardEmbed, panelEmbed } from "./embeds.js";
+import { boardEmbed, guideEmbeds, panelEmbed } from "./embeds.js";
 import { findTextChannel } from "./guild-utils.js";
 import { read, update } from "./store.js";
 
@@ -99,6 +99,44 @@ export async function refreshMarketDisplaysNow(client) {
         return await running;
     } finally {
         running = null;
+    }
+}
+
+function guideChannel(guild) {
+    return (
+        findTextChannel(guild, "📘・guide-du-bot") ??
+        guild.channels.cache.find((channel) => channel.isTextBased?.() && /guide-du-bot/i.test(channel.name)) ??
+        null
+    );
+}
+
+/**
+ * 📘・guide-du-bot: one message holding the guide embeds, created once then
+ * edited so the factors and interval it quotes stay current. Called at boot
+ * and after /setup; errors are logged, never thrown.
+ */
+export async function refreshGuide(client) {
+    try {
+        if (!client?.isReady?.()) return false;
+        const guild = SETTINGS.guildId ? client.guilds.cache.get(SETTINGS.guildId) : client.guilds.cache.first();
+        const channel = guild ? guideChannel(guild) : null;
+        if (!channel) return false;
+
+        const saved = read("panels.json").guide ?? {};
+        const payload = { embeds: guideEmbeds() };
+        const existing = saved.channelId === channel.id ? await fetchMessage(client, channel.id, saved.messageId) : null;
+        const message = existing ? await existing.edit(payload) : await channel.send(payload);
+
+        if (!existing) {
+            update("panels.json", (data) => {
+                data.guide = { channelId: channel.id, messageId: message.id };
+                return true;
+            });
+        }
+        return true;
+    } catch (error) {
+        console.error("[live-board] guide-du-bot :", error.message);
+        return false;
     }
 }
 

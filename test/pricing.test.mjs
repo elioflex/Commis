@@ -3,7 +3,7 @@ import test from "node:test";
 
 import { DOFUS_SERVERS, TICKET_TYPE_IDS } from "../config.js";
 import { priceTableModal } from "../src/components.js";
-import { boardEmbed, panelEmbed, rateEmbed } from "../src/embeds.js";
+import { boardEmbed, guideEmbeds, panelEmbed, rateEmbed } from "../src/embeds.js";
 import {
     effectiveRate,
     formatPriceTable,
@@ -19,6 +19,15 @@ import {
 import { read, setPath } from "../src/store.js";
 
 /** Discord rejects a message whose embeds exceed these limits. */
+function embedLength(json) {
+    return (
+        (json.title?.length ?? 0) +
+        (json.description?.length ?? 0) +
+        (json.footer?.text?.length ?? 0) +
+        (json.fields ?? []).reduce((sum, field) => sum + field.name.length + field.value.length, 0)
+    );
+}
+
 function assertEmbedFits(embed, label) {
     const json = embed.toJSON();
     const fields = json.fields ?? [];
@@ -113,4 +122,16 @@ test("stock views skip servers we no longer sell", () => {
     } finally {
         setPath("market.json", "stock", saved);
     }
+});
+
+test("the bot guide fits in one message and lists every command", () => {
+    const embeds = guideEmbeds();
+    for (const embed of embeds) assertEmbedFits(embed, `guide ${embed.data.title}`);
+    // Discord caps the embeds of a single message at 6000 characters together.
+    assert.ok(embeds.reduce((sum, embed) => sum + embedLength(embed.toJSON()), 0) <= 6000);
+
+    const text = JSON.stringify(embeds.map((embed) => embed.toJSON()));
+    const commands = ["/rate ajuster", "/rate prix", "/rate tableau", "/rate auto", "/stock set"];
+    commands.push("/ticket claim", "/ticket close", "/panel", "/setup", "/check", "/avis");
+    for (const command of commands) assert.ok(text.includes(command), `guide mentions ${command}`);
 });

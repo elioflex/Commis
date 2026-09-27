@@ -50,11 +50,6 @@ services:
         value: on
       - key: PRICE_FEED_INTERVAL_MIN
         value: "30"
-      # http://user:pass@hôte:port — à saisir dans le tableau de bord Render, jamais ici.
-      - key: PRICE_FEED_PROXY
-        sync: false
-      - key: PRICE_FEED_PROXY_MODE
-        value: fallback
 
       # ── état (le disque Render est effacé à chaque redéploiement) ──
       # Le bot republie un instantané dans « ⚙️・gestion » et le réimporte au boot.

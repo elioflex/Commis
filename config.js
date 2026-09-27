@@ -61,9 +61,6 @@ export const SETTINGS = {
     priceFeed: str("PRICE_FEED", "on") === "off" ? "off" : "on",
     priceFeedIntervalMin: Math.max(10, int("PRICE_FEED_INTERVAL_MIN", 30)),
     // http://user:pass@host:port — secret, only in .env / Render, never in the repo.
-    priceFeedProxy: str("PRICE_FEED_PROXY", ""),
-    // fallback = direct first, proxy only for a site that blocks us · always = every request via the proxy
-    priceFeedProxyMode: str("PRICE_FEED_PROXY_MODE", "fallback") === "always" ? "always" : "fallback",
     // Channel that holds the state snapshot; /setup creates « ⚙️・gestion » for it.
     stateChannelId: snowflake("STATE_CHANNEL_ID"),
     stateMirror: str("STATE_MIRROR", "on") === "off" ? "off" : "on",
@@ -310,6 +307,7 @@ export const LAYOUT = [
         name: "🔒 | Staff",
         staffOnly: true,
         channels: [
+            { name: "📘・guide-du-bot", topic: "📘 Comment fonctionne le bot et toutes ses commandes — tenu à jour automatiquement." },
             { name: "📦・commandes", topic: "Suivi des commandes en cours." },
             { name: "💳・paiements", topic: "Preuves de paiement." },
             { name: "📝・détails-ventes", topic: "Détails des ventes." },

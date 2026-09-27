@@ -63,7 +63,7 @@ kamas-market-bot/
 │   ├── tickets.js       ← cycle de vie d'un ticket (création, claim, étapes, fermeture)
 │   ├── market.js        ← taux, stock, PRIX PAR SERVEUR, calcul des totaux, formatage FR
 │   ├── live-board.js    ← met à jour panneaux + 📈・taux-du-jour après chaque changement de prix/stock
-│   ├── price-feed.js    ← PRIX WEB : kamasv.com + 1kamas.com (vente), leskamas.com (rachat), proxy en secours
+│   ├── price-feed.js    ← PRIX WEB : kamasv.com + 1kamas.com (vente), leskamas.com (rachat), requêtes directes
 │   ├── embeds.js        ← tous les embeds Discord
 │   ├── components.js    ← boutons, menus, modales (builders)
 │   ├── persist.js       ← MIROIR D'ÉTAT : sauvegarde data/ dans Discord (salon ⚙️・gestion)
@@ -145,10 +145,8 @@ que s'il est confirmé au relevé suivant ; une boutique en panne garde les dern
 📈・taux-du-jour sont mis à jour. `PRICE_FEED=off` désactive le relevé ; `/rate auto actif:False`
 met les prix web en pause sans redéployer.
 
-**Proxy** (`PRICE_FEED_PROXY=http://user:pass@hôte:port`, secret : `.env` et Render uniquement) :
-par défaut le bot tente en direct et ne passe par le proxy que pour un site qui le bloque
-(403/429/503 ou coupure réseau), pendant 6 h. `PRICE_FEED_PROXY_MODE=always` force le proxy
-partout (≈ 4 Go/mois de trafic proxy facturé). Utilise `undici` (déjà fourni par discord.js).
+**Pas de proxy** : le bot lit les sites en direct. Si un site bloque l'IP de Render, son relevé
+échoue (erreur dans `/rate auto`) et les derniers prix connus restent affichés.
 
 Chaque changement (`/rate`, `/stock`, `/rate tableau`) met à jour **automatiquement** les 3 panneaux
 marché (édition du message existant) et les 3 messages de `📈・taux-du-jour` (`src/live-board.js`,

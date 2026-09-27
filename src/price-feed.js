@@ -1,5 +1,3 @@
-import { ProxyAgent, fetch as proxyFetch } from "undici";
-
 import { DOFUS_SERVERS, SETTINGS } from "../config.js";
 import { refreshMarketDisplays } from "./live-board.js";
 import { read, update } from "./store.js";
@@ -13,17 +11,13 @@ import { read, update } from "./store.js";
  * - leskamas.com BUYS kamas from players; its price list is a plain HTML table.
  *   That payout is our sell reference → `feed.sellReference`.
  *
- * We fetch sequentially and only every `PRICE_FEED_INTERVAL_MIN`. When a site
- * blocks direct requests (Cloudflare 403/429…), requests to that host go
- * through `PRICE_FEED_PROXY` for a while — or always, with PRICE_FEED_PROXY_MODE.
+ * We fetch sequentially and only every `PRICE_FEED_INTERVAL_MIN`, directly (no proxy).
  *
  * `market.js` turns both references into our buy / sell / exchange prices with
  * the staff factors.
  */
 
 const USER_AGENT = "CommisPriceBot/1.0 (Discord bot; prix de reference, 1 passage / 30 min)";
-// Through a residential proxy a bot user-agent would be blocked all the same.
-const BROWSER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0 Safari/537.36";
 const REQUEST_TIMEOUT_MS = 15_000;
 const REQUEST_GAP_MS = 400;
 /** A price that moves more than this between two fetches must be confirmed by the next one. */
@@ -38,62 +32,15 @@ export const SOURCES = [
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-/* ───────────────────────── HTTP (direct, proxy on block) ───────────────────────── */
+/* ───────────────────────── HTTP ───────────────────────── */
 
-/** Statuses that mean "we are being blocked", worth retrying through the proxy. */
-const BLOCKED_STATUSES = new Set([403, 429, 503]);
-const PROXY_STICKY_MS = 6 * 60 * 60_000;
-
-let proxyAgent = null;
-const proxiedHosts = new Map(); // host → timestamp until which we go through the proxy
-
-function getProxyAgent() {
-    if (!SETTINGS.priceFeedProxy) return null;
-    proxyAgent ??= new ProxyAgent(SETTINGS.priceFeedProxy);
-    return proxyAgent;
-}
-
-/** Hosts currently routed through the proxy (for `/rate auto`). Never exposes the proxy itself. */
-export function proxyStatus() {
-    const now = Date.now();
-    const hosts = [...proxiedHosts].filter(([, until]) => until > now).map(([host]) => host);
-    return { configured: Boolean(SETTINGS.priceFeedProxy), mode: SETTINGS.priceFeedProxyMode, hosts };
-}
-
-async function request(url, accept, viaProxy) {
-    const options = {
-        headers: { "User-Agent": viaProxy ? BROWSER_AGENT : USER_AGENT, Accept: accept },
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-    };
-    const response = viaProxy
-        ? await proxyFetch(url, { ...options, dispatcher: getProxyAgent() })
-        : await fetch(url, options);
-    if (!response.ok) {
-        const error = new Error(`HTTP ${response.status} sur ${new URL(url).host}${viaProxy ? " (via proxy)" : ""}`);
-        error.blocked = BLOCKED_STATUSES.has(response.status);
-        throw error;
-    }
-    return response;
-}
-
-/** GET with automatic fallback to the proxy when a host blocks direct requests. */
 async function httpGet(url, accept) {
-    const host = new URL(url).host;
-    const proxy = getProxyAgent();
-    const sticky = (proxiedHosts.get(host) ?? 0) > Date.now();
-
-    if (proxy && (SETTINGS.priceFeedProxyMode === "always" || sticky)) return request(url, accept, true);
-
-    try {
-        return await request(url, accept, false);
-    } catch (error) {
-        // Network errors (no .blocked) are also retried: a firewall drop looks like a timeout.
-        if (!proxy || error.blocked === false) throw error;
-        const response = await request(url, accept, true);
-        proxiedHosts.set(host, Date.now() + PROXY_STICKY_MS);
-        console.warn(`[price-feed] ${host} bloque les requêtes directes → proxy pendant 6 h`);
-        return response;
-    }
+    const response = await fetch(url, {
+        headers: { "User-Agent": USER_AGENT, Accept: accept },
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status} sur ${new URL(url).host}`);
+    return response;
 }
 
 async function defaultFetchJson(url) {
@@ -344,7 +291,7 @@ export async function runPriceFeed({
                 if (Object.keys(prices).length) byKind[source.kind ?? "retail"][source.id] = prices;
                 else errors.push(`${source.label} : aucun prix reconnu`);
             } catch (error) {
-                // undici hides the reason behind "fetch failed": show ECONNREFUSED, 407 proxy auth, etc.
+                // fetch hides the reason behind "fetch failed": show ECONNREFUSED, ENOTFOUND, etc.
                 const cause = error.cause?.code ?? error.cause?.message;
                 errors.push(`${source.label} : ${error.message}${cause ? ` (${cause})` : ""}`);
             }
@@ -410,9 +357,8 @@ export function startPriceFeed(client) {
     void runPriceFeed({ client });
     timer = setInterval(() => void runPriceFeed({ client }), everyMs);
     timer.unref?.();
-    const proxy = SETTINGS.priceFeedProxy ? ` · proxy ${SETTINGS.priceFeedProxyMode === "always" ? "systématique" : "en secours"}` : "";
     console.info(
-        `[price-feed] actif — ${SOURCES.map((source) => source.label).join(" + ")}, toutes les ${SETTINGS.priceFeedIntervalMin} min${proxy}`,
+        `[price-feed] actif — ${SOURCES.map((source) => source.label).join(" + ")}, toutes les ${SETTINGS.priceFeedIntervalMin} min`,
     );
     return true;
 }

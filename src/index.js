@@ -5,7 +5,7 @@ import { ActivityType, Client, Events, GatewayIntentBits, Partials } from "disco
 import { BRAND, SETTINGS } from "../config.js";
 import { startHealthServer } from "./health.js";
 import { handleInteraction } from "./interactions.js";
-import { refreshMarketDisplaysNow } from "./live-board.js";
+import { refreshGuide, refreshMarketDisplaysNow } from "./live-board.js";
 import { mirrorStateNow, restoreState, scheduleStateMirror, stateMirrorStatus } from "./persist.js";
 import { startPriceFeed } from "./price-feed.js";
 import { read, setWriteHook } from "./store.js";
@@ -74,6 +74,7 @@ client.once(Events.ClientReady, async (readyClient) => {
     // pick up the current prices, and the 📈・taux-du-jour board is created.
     const refreshed = await refreshMarketDisplaysNow(readyClient);
     console.info(`[bot] Prix affichés : ${refreshed.panels} panneau(x), ${refreshed.board} message(s) taux-du-jour`);
+    if (await refreshGuide(readyClient)) console.info("[bot] Guide publié dans 📘・guide-du-bot");
 
     // Market prices read from the web every PRICE_FEED_INTERVAL_MIN (PRICE_FEED=off to disable).
     startPriceFeed(readyClient);

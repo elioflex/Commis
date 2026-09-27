@@ -23,7 +23,7 @@ import {
     successEmbed,
 } from "./embeds.js";
 import { isManager, isStaff } from "./guild-utils.js";
-import { refreshMarketDisplays } from "./live-board.js";
+import { refreshGuide, refreshMarketDisplays } from "./live-board.js";
 import {
     MAX_ADJUST,
     competitorEdge,
@@ -44,7 +44,7 @@ import {
     setStock,
 } from "./market.js";
 import { checkGuild, formatChecks } from "./preflight.js";
-import { priceFeedRunning, proxyStatus, runPriceFeed } from "./price-feed.js";
+import { priceFeedRunning, runPriceFeed } from "./price-feed.js";
 import { setupGuild } from "./setup.js";
 import { update } from "./store.js";
 import {
@@ -434,6 +434,7 @@ export async function runCommand(client, interaction) {
         }
 
         const report = await setupGuild(interaction.guild, { skipRoles: onlyChannels, withPaymentRoles });
+        void refreshGuide(client);
 
         return interaction.editReply({
             embeds: [
@@ -550,11 +551,13 @@ export async function runCommand(client, interaction) {
                 );
             }
 
-            if (notes.length) refreshMarketDisplays(client);
+            if (notes.length) {
+                refreshMarketDisplays(client);
+                void refreshGuide(client);
+            }
             const status = feedStatusEmbed({
                 running: priceFeedRunning(),
                 intervalMin: SETTINGS.priceFeedIntervalMin,
-                proxy: proxyStatus(),
             });
             return interaction.editReply({ content: notes.join("\n") || undefined, embeds: [status] });
         }
