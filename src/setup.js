@@ -48,6 +48,13 @@ export async function setupGuild(
         transcriptChannelId: null,
     };
 
+    // Refresh the caches first: both checks below are name-based, and a stale
+    // cache would happily create duplicates on a re-run after a partial setup.
+    if (!dryRun) {
+        await guild.roles.fetch().catch(() => null);
+        await guild.channels.fetch().catch(() => null);
+    }
+
     /* ── roles ── */
     for (const definition of plannedRoles({ withPaymentRoles })) {
         if (roleExists(guild, definition.name)) {
@@ -61,7 +68,8 @@ export async function setupGuild(
         await guild.roles
             .create({
                 name: definition.name,
-                color: definition.color,
+                // discord.js ≥ 14.16 expects `colors`, not the deprecated `color`.
+                colors: { primaryColor: definition.color },
                 hoist: definition.hoist,
                 mentionable: definition.hoist,
                 reason: "Setup marketplace",
