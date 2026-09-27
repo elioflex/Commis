@@ -1,13 +1,26 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { autoPrice, effectiveRate, priceSource, setFeedEnabled, setServerPrice } from "../src/market.js";
+import {
+    autoPrice,
+    competitorEdge,
+    edgeLine,
+    effectiveRate,
+    eurPrice,
+    priceSource,
+    resolveServers,
+    serverRateFields,
+    setFeedEnabled,
+    setServerAdjustments,
+    setServerPrice,
+} from "../src/market.js";
 import {
     buildReference,
     gameFromTitle,
     kamasVariationTargets,
     matchServer,
     parseKamasv,
+    parseLeskamas,
     runPriceFeed,
 } from "../src/price-feed.js";
 import { read, update } from "../src/store.js";
@@ -51,6 +64,19 @@ const ONEKAMAS_VARIATIONS = {
     72: { prices: eur(44), is_in_stock: false },
 };
 
+// leskamas.com « vendre des kamas » table, trimmed.
+const LESKAMAS_HTML = `<p>Vendez vos kamas</p><div><table border="1" class="hovertable"><tbody>
+<tr><td>Server</td><td>Paypal / Skrill / SEPA</td><td>BitCoin</td><td>Status</td></tr>
+<tr style="background: white"><td colspan="7" style="text-align:center">Dofus Kamas</td></tr>
+<tr onmouseover="x"><td>Draconiros</td><td>0.52€/M</td><td>0.515€/M</td><td>Incomplet</td></tr>
+<tr><td>Ombre(Shadow)</td><td>0.371€/M</td><td>0.367€/M</td><td><font color='red'>Stock complet</font></td></tr>
+<tr style="background: white"><td colspan="7" style="text-align:center">Dofus Touch Kamas</td></tr>
+<tr><td>Kelerog</td><td>2.28€/M</td><td>2.257€/M</td><td>Incomplet</td></tr>
+<tr><td>Temporix-1</td><td>0.1€/M</td><td>0.099€/M</td><td>Incomplet</td></tr>
+<tr style="background: white"><td colspan="7" style="text-align:center">Wakfu Kamas</td></tr>
+<tr><td>Rubilax</td><td>1.02€/M</td><td>1.010€/M</td><td>Incomplet</td></tr>
+</tbody></table></div>`;
+
 /** Run `fn` with market.json's feed and server prices restored afterwards. */
 async function withMarket(fn) {
     const saved = structuredClone(read("market.json"));
@@ -88,6 +114,11 @@ test("1kamas: one variation per matched server, first product wins", () => {
     ]);
 });
 
+test("leskamas: payout per game section, seasonal servers skipped", () => {
+    assert.deepEqual(parseLeskamas(LESKAMAS_HTML), { drac: 0.52, ombre: 0.371, kelerog: 2.28, rubilax: 1.02 });
+    assert.deepEqual(parseLeskamas("<html>maintenance</html>"), {});
+});
+
 test("reference is the median of shops and big jumps wait for confirmation", () => {
     const first = buildReference({ kamasv: { drac: 0.77 }, "1kamas": { drac: 0.81 } });
     assert.equal(first.reference.drac.eur, 0.79);
@@ -123,7 +154,7 @@ test("runPriceFeed stores the reference and prices follow manual > web > base", 
             return true;
         });
 
-        const result = await runPriceFeed({ fetchJson });
+        const result = await runPriceFeed({ fetchJson, fetchText: async () => LESKAMAS_HTML });
         assert.equal(result.ok, true);
         assert.deepEqual(result.errors, []);
 
@@ -132,21 +163,29 @@ test("runPriceFeed stores the reference and prices follow manual > web > base", 
         assert.deepEqual(feed.reference.drac.sources, { kamasv: 0.77, "1kamas": 0.8 });
         assert.equal(feed.reference.talkasha, undefined, "out-of-stock variation ignored");
 
-        // Web price × factor (buy 100 %, sell 70 %).
+        assert.equal(feed.sellReference.drac.eur, 0.52);
+
+        // Buy: 3 % under the cheapest shop (0.77 → 0.7469, rounded down).
+        // Sell: 3 % over leskamas's payout (0.52 → 0.5356, rounded up).
         assert.equal(priceSource("drac", "buy"), "auto");
-        assert.equal(autoPrice("drac", "buy"), 0.79);
-        assert.equal(effectiveRate("EUR", "sell", "drac"), 0.55);
+        assert.equal(autoPrice("drac", "buy"), 0.74);
+        assert.equal(effectiveRate("EUR", "sell", "drac"), 0.54);
+        // No payout source for Talkasha… and no retail either (out of stock) → base.
+        assert.equal(priceSource("talkasha", "sell"), "base");
+        // Rubilax: payout only → sell is automatic, buy stays on the base rate.
+        assert.equal(autoPrice("rubilax", "sell"), 1.06);
+        assert.equal(priceSource("rubilax", "buy"), "base");
 
         // Manual wins, clearing it gives the web price back.
         setServerPrice("drac", "buy", 1.5);
         assert.equal(effectiveRate("EUR", "buy", "drac"), 1.5);
         setServerPrice("drac", "buy", 0);
-        assert.equal(effectiveRate("EUR", "buy", "drac"), 0.79);
+        assert.equal(effectiveRate("EUR", "buy", "drac"), 0.74);
 
         // Paused feed → base rate × multiplier.
         setFeedEnabled(false);
         assert.equal(priceSource("drac", "buy"), "base");
-        assert.notEqual(effectiveRate("EUR", "buy", "drac"), 0.79);
+        assert.notEqual(effectiveRate("EUR", "buy", "drac"), 0.74);
     });
 });
 
@@ -156,14 +195,111 @@ test("runPriceFeed keeps the last prices when every shop fails", async () => {
             data.feed = { reference: { drac: { eur: 0.7, sources: { kamasv: 0.7 } } } };
             return true;
         });
-        const result = await runPriceFeed({
-            fetchJson: async () => {
-                throw new Error("HTTP 503");
-            },
-        });
+        const fail = async () => {
+            throw new Error("HTTP 503");
+        };
+        const result = await runPriceFeed({ fetchJson: fail, fetchText: fail });
         assert.equal(result.ok, false);
         const feed = read("market.json").feed;
         assert.equal(feed.reference.drac.eur, 0.7);
         assert.match(feed.lastError, /HTTP 503/);
+    });
+});
+
+test("sell falls back to 70 % of the retail price when no shop publishes a payout", async () => {
+    await withMarket(async () => {
+        update("market.json", (data) => {
+            delete data.serverPrices;
+            data.feed = { reference: { orukam: { eur: 0.45, sources: { kamasv: 0.45 } } } };
+            return true;
+        });
+        // 0.45 × 70 % × 103 % = 0.324 → 0.33 · 0.45 × 97 % = 0.4365 → 0.43
+        assert.equal(autoPrice("orukam", "sell"), 0.33);
+        assert.equal(autoPrice("orukam", "buy"), 0.43);
+    });
+});
+
+/** A fresh feed: two shops for Draconiros and Mikhal, leskamas's payouts. */
+function seedFeed(fetchedAt = new Date().toISOString()) {
+    update("market.json", (data) => {
+        delete data.serverPrices;
+        delete data.adjustments;
+        data.feed = {
+            fetchedAt,
+            reference: {
+                drac: { eur: 0.785, sources: { kamasv: 0.77, "1kamas": 0.8 } },
+                mikhal: { eur: 0.67, sources: { kamasv: 0.67 } },
+            },
+            sellReference: {
+                drac: { eur: 0.52, sources: { leskamas: 0.52 } },
+                mikhal: { eur: 0.66, sources: { leskamas: 0.66 } },
+            },
+        };
+        return true;
+    });
+}
+
+test("displays show only the competitors we beat, and only while prices are fresh", async () => {
+    await withMarket(async () => {
+        seedFeed();
+        assert.deepEqual(competitorEdge("drac", "buy"), [
+            { site: "1kamas", price: 0.8, gap: 7.5 },
+            { site: "kamasv", price: 0.77, gap: 3.9 },
+        ]);
+        assert.equal(edgeLine("drac", "buy"), "  🏆 -7,5 % vs 1Kamas (0,80 €) · -3,9 % vs KamasV (0,77 €)");
+        assert.equal(edgeLine("drac", "sell"), "  🏆 +3,8 % vs LesKamas (0,52 €)");
+        assert.equal(edgeLine("drac", "exchange"), null);
+
+        // Stale competitor prices (feed down for hours) are never shown publicly.
+        seedFeed(new Date(Date.now() - 7 * 60 * 60 * 1000).toISOString());
+        assert.equal(edgeLine("drac", "buy"), null);
+
+        // Every panel stays inside Discord's limits with the comparison lines.
+        seedFeed();
+        for (const kind of ["buy", "sell", "exchange"]) {
+            const fields = serverRateFields(kind);
+            assert.ok(fields.every((field) => field.value.length <= 1024));
+            assert.ok(fields.reduce((sum, field) => sum + field.value.length + field.name.length, 0) < 5000);
+        }
+    });
+});
+
+test("what we pay never eats the margin, unless staff pinned it by hand", async () => {
+    await withMarket(async () => {
+        seedFeed();
+        // Mikhal: buy 0.67 × 97 % = 0.64; paying 0.66 × 103 % = 0.68 would lose money.
+        assert.equal(eurPrice("mikhal", "buy").eur, 0.64);
+        assert.deepEqual(eurPrice("mikhal", "sell"), { eur: 0.6, manual: false, capped: true });
+        assert.equal(edgeLine("mikhal", "sell"), null, "no 'better than LesKamas' claim when capped below it");
+
+        setServerPrice("mikhal", "sell", 0.7);
+        assert.deepEqual(eurPrice("mikhal", "sell"), { eur: 0.7, manual: true, capped: false });
+    });
+});
+
+test("manager adjustments: one, several or all servers, per side", async () => {
+    await withMarket(async () => {
+        seedFeed();
+        assert.deepEqual(resolveServers("drac, Ombre (Shadow); kelerog").codes, ["drac", "ombre", "kelerog"]);
+        assert.deepEqual(resolveServers("touch").codes, ["tiliwan", "kelerog", "blair", "talok"]);
+        assert.equal(resolveServers("tous").codes.length, 23);
+        assert.deepEqual(resolveServers("drac, truc").unknown, ["truc"]);
+
+        setServerAdjustments(["drac"], ["buy"], -2);
+        assert.equal(autoPrice("drac", "buy"), 0.73); // 0.7469 × 98 % = 0.732
+        assert.equal(autoPrice("drac", "sell"), 0.54, "the other side is untouched");
+
+        setServerAdjustments(["drac"], ["buy", "sell"], 2);
+        assert.equal(autoPrice("drac", "buy"), 0.76);
+        assert.equal(autoPrice("drac", "sell"), 0.55);
+
+        // Adjustments also apply on the base rate when the web has no price.
+        const before = effectiveRate("EUR", "buy", "talkasha");
+        setServerAdjustments(["talkasha"], ["buy"], 10);
+        assert.equal(effectiveRate("EUR", "buy", "talkasha"), Math.round(before * 1.1 * 1000) / 1000);
+
+        assert.equal(setServerAdjustments(["drac", "talkasha"], ["buy", "sell"], 0), 0);
+        assert.equal(autoPrice("drac", "buy"), 0.74);
+        assert.equal(setServerAdjustments(["drac"], ["buy"], -90), -50, "capped at ±50 %");
     });
 });

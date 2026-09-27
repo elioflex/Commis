@@ -16,7 +16,7 @@ import {
     simpleModal,
 } from "./components.js";
 import { baseEmbed, errorEmbed, infoEmbed, successEmbed } from "./embeds.js";
-import { isStaff } from "./guild-utils.js";
+import { isManager, isStaff } from "./guild-utils.js";
 import { refreshMarketDisplays } from "./live-board.js";
 import {
     parseMillions,
@@ -401,7 +401,9 @@ async function handleModal(client, interaction) {
     }
 
     if (scope === "modal" && rest[0] === "prices") {
-        if (!(await needStaff(interaction))) return undefined;
+        if (!isManager(interaction.member)) {
+            return respond(interaction, { embeds: [errorEmbed("Seul le manager peut modifier les prix.", "🔒 Accès refusé")] });
+        }
         const { updates, errors } = parsePriceTable(interaction.fields.getTextInputValue("table"));
 
         // All-or-nothing: a typo must not leave half the servers updated.

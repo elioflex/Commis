@@ -2,6 +2,7 @@ import { EmbedBuilder } from "discord.js";
 
 import {
     BRAND,
+    COMPETITORS,
     PAYMENT_METHODS,
     SETTINGS,
     TICKET_TYPES,
@@ -12,16 +13,20 @@ import {
     serverLabel,
 } from "../config.js";
 import {
+    competitorEdge,
+    competitorPrices,
     effectiveRate,
+    eurPrice,
     feedEnabled,
     feedFactors,
     feedState,
     formatMillions,
     formatMoney,
     market,
-    priceSource,
+    MIN_MARGIN,
     rateFor,
     rateLines,
+    serverAdjustment,
     serverRateFields,
     stockLines,
     stockSummary,
@@ -54,13 +59,43 @@ export const infoEmbed = (description, title) =>
 
 const isMarketType = (typeId) => typeId === "achat" || typeId === "vente" || typeId === "echange";
 
+const siteList = (sites) => {
+    const names = sites.map((site) => COMPETITORS[site] ?? site);
+    return names.length > 1 ? `${names.slice(0, -1).join(", ")} et ${names.at(-1)}` : names[0];
+};
+
+/**
+ * "🏆 Moins cher que KamasV et 1Kamas sur 12 serveurs" — the headline of the
+ * achat / vente displays. Null when we beat nobody (or the feed is stale).
+ */
+function comparisonLine(kind) {
+    if (kind === "exchange") return null;
+    const sites = new Set();
+    let servers = 0;
+    for (const server of DOFUS_SERVERS) {
+        const edges = competitorEdge(server.code, kind);
+        if (!edges.length) continue;
+        servers += 1;
+        for (const { site } of edges) sites.add(site);
+    }
+    if (!servers) return null;
+    const what = kind === "sell" ? "On te paie plus que" : "Moins cher que";
+    return `🏆 **${what} ${siteList([...sites])}** sur ${servers} serveur${servers > 1 ? "s" : ""} — prix relevés en direct sur leurs sites.`;
+}
+
 /** The big embed that sits behind each market panel button. */
 export function panelEmbed(typeId) {
     const type = TICKET_TYPES[typeId];
     const embed = baseEmbed({ color: type.color })
         .setTitle(`${type.emoji}  ${BRAND.name} • ${type.label}`)
         .setDescription(
-            [type.blurb, "", `Clique sur le bouton ci-dessous 👇`, isMarketType(typeId) ? pricesUpdatedLine() : null]
+            [
+                type.blurb,
+                isMarketType(typeId) ? comparisonLine(kindForType(typeId)) : null,
+                "",
+                `Clique sur le bouton ci-dessous 👇`,
+                isMarketType(typeId) ? pricesUpdatedLine() : null,
+            ]
                 .filter((line) => line !== null)
                 .join("\n"),
         );
@@ -112,7 +147,11 @@ const BOARD_TITLES = {
 
 /** One of the three live embeds kept up to date in 📈・taux-du-jour. */
 export function boardEmbed(kind) {
-    const lines = [pricesUpdatedLine(), kind === "exchange" ? "_-10 % automatique à partir de 100 M._" : null].filter(
+    const lines = [
+        comparisonLine(kind),
+        pricesUpdatedLine(),
+        kind === "exchange" ? "_-10 % automatique à partir de 100 M._" : null,
+    ].filter(
         (line) => line !== null,
     );
     const embed = baseEmbed({ color: kind === "buy" ? BRAND.colors.success : kind === "sell" ? BRAND.colors.info : BRAND.colors.brand })
@@ -128,25 +167,42 @@ const relative = (iso) => {
 };
 
 /** `/rate auto` — state of the web price feed, one line per server. */
-export function feedStatusEmbed({ running = false, intervalMin = null } = {}) {
+export function feedStatusEmbed({ running = false, intervalMin = null, proxy = null } = {}) {
     const feed = feedState();
     const factors = feedFactors();
     const enabled = feedEnabled();
 
-    const lines = DOFUS_SERVERS.filter((server) => server.game).map((server) => {
-        const entry = feed.reference?.[server.code];
-        const source = priceSource(server.code, "buy");
-        if (!entry) return `⚪ **${serverLabel(server)}** · pas de prix web`;
-        const shops = Object.entries(entry.sources ?? {})
-            .map(([shop, value]) => `${shop} ${formatMoney(value, "EUR")}`)
-            .join(" · ");
-        const pending = feed.pending?.[server.code];
+    const eur = (value) => formatMoney(value, "EUR");
+    const sideText = (code, kind) => {
+        const price = eurPrice(code, kind);
+        if (!price) return null;
+        const others = Object.entries(competitorPrices(code, kind));
+        const beaten = competitorEdge(code, kind).length;
+        const verdict = !others.length ? "" : beaten === others.length ? " ✅" : beaten ? " ➖" : " ❌";
+        const shops = others.map(([site, value]) => `${COMPETITORS[site] ?? site} ${eur(value)}`).join(", ");
+        const adjust = serverAdjustment(code, kind);
         return [
-            `${source === "manuel" ? "📌" : "🌐"} **${serverLabel(server)}** · marché **${formatMoney(entry.eur, "EUR")}/M**`,
+            `${kind === "buy" ? "vend" : "paie"} **${eur(price.eur)}**${verdict}`,
             shops ? ` (${shops})` : "",
-            source === "manuel" ? " · _prix manuel prioritaire_" : "",
-            pending ? ` · ⚠️ saut à ${formatMoney(pending, "EUR")} en attente` : "",
+            adjust ? ` 🎚️${adjust > 0 ? "+" : ""}${adjust} %` : "",
+            price.manual ? " 📌" : "",
+            price.capped ? " 🛡️" : "",
         ].join("");
+    };
+
+    const lines = DOFUS_SERVERS.filter((server) => server.game).map((server) => {
+        if (!feed.reference?.[server.code] && !feed.sellReference?.[server.code]) {
+            return `⚪ **${serverLabel(server)}** · pas de prix web`;
+        }
+        const pending = feed.pending?.[server.code] ?? feed.sellPending?.[server.code];
+        return [
+            `**${serverLabel(server)}**`,
+            sideText(server.code, "buy"),
+            sideText(server.code, "sell"),
+            pending ? `⚠️ saut à ${eur(pending)} en attente` : null,
+        ]
+            .filter(Boolean)
+            .join(" · ");
     });
 
     const fields = [];
@@ -165,18 +221,23 @@ export function feedStatusEmbed({ running = false, intervalMin = null } = {}) {
         .setDescription(
             [
                 `État : **${enabled ? "actif" : "en pause"}**${running ? "" : " · _relevé automatique désactivé (PRICE_FEED=off)_"}`,
-                intervalMin ? `Relevé toutes les **${intervalMin} min** sur kamasv.com et 1kamas.com` : null,
+                intervalMin ? `Relevé toutes les **${intervalMin} min** : kamasv.com + 1kamas.com (vente), leskamas.com (rachat)` : null,
+                proxy?.configured
+                    ? `Proxy : ${proxy.mode === "always" ? "toutes les requêtes" : "en secours"}${proxy.hosts.length ? ` · utilisé pour ${proxy.hosts.join(", ")}` : ""}`
+                    : null,
                 `Dernier relevé réussi : ${relative(feed.fetchedAt)} · dernière tentative : ${relative(feed.lastAttemptAt)}`,
-                `Nos prix = marché × **${percent(factors.buy)}** achat · **${percent(factors.sell)}** vente · **${percent(factors.exchange)}** échange`,
+                `On vend à **${percent(factors.buy)}** du concurrent le moins cher · on paie **${percent(factors.sell)}** ` +
+                    `du meilleur rachat · échange = **${percent(factors.exchange)}** du marché`,
                 feed.lastError ? `⚠️ ${feed.lastError.slice(0, 300)}` : null,
                 "",
+                `✅ meilleur que tous · ➖ que certains · ❌ que personne · 🎚️ ajustement (\`/rate ajuster\`) · 📌 prix manuel · 🛡️ plafonné pour garder ${percent(MIN_MARGIN)} de marge`,
                 "_Priorité : prix manuel (`/rate prix`) › prix web › taux de base. `/rate prix … 0` rend la main au web._",
             ]
                 .filter((line) => line !== null)
                 .join("\n"),
         )
         .addFields(fields.slice(0, 5).map((value, index) => ({
-            name: `🖥️ Référence marché (${index + 1}/${Math.min(fields.length, 5)})`,
+            name: `🖥️ Nous vs concurrents (${index + 1}/${Math.min(fields.length, 5)})`,
             value,
             inline: false,
         })));
@@ -292,7 +353,7 @@ export function helpEmbed(prefix) {
                 "`/ticket stats` — (staff) statistiques",
                 "",
                 "**Marché**",
-                "`/rate` — voir les prix par serveur • `/rate set <devise> <sens> <prix>` (base) • `/rate prix <serveur> <sens> <prix>` • `/rate tableau` (tous les serveurs d'un coup, staff) • `/rate auto` (prix web, staff)",
+                "`/rate` — voir les prix par serveur • `/rate set <devise> <sens> <prix>` (base) • `/rate prix <serveur> <sens> <prix>` • `/rate tableau` (tous les serveurs d'un coup, staff) • `/rate auto` (prix web) • `/rate ajuster <sens> <serveurs> <%>` (manager)",
                 "`/stock` — voir le stock • `/stock set <serveur> <millions> <dispo|limite|complet>`",
                 "`/avis <note> <texte>` — laisser un avis",
                 "",

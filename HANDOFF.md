@@ -63,7 +63,7 @@ kamas-market-bot/
 │   ├── tickets.js       ← cycle de vie d'un ticket (création, claim, étapes, fermeture)
 │   ├── market.js        ← taux, stock, PRIX PAR SERVEUR, calcul des totaux, formatage FR
 │   ├── live-board.js    ← met à jour panneaux + 📈・taux-du-jour après chaque changement de prix/stock
-│   ├── price-feed.js    ← PRIX WEB : relève kamasv.com + 1kamas.com toutes les 30 min
+│   ├── price-feed.js    ← PRIX WEB : kamasv.com + 1kamas.com (vente), leskamas.com (rachat), proxy en secours
 │   ├── embeds.js        ← tous les embeds Discord
 │   ├── components.js    ← boutons, menus, modales (builders)
 │   ├── persist.js       ← MIROIR D'ÉTAT : sauvegarde data/ dans Discord (salon ⚙️・gestion)
@@ -79,11 +79,11 @@ kamas-market-bot/
     ├── preflight.test.mjs ← 7 tests (diagnostic, permissions, rôles paiement)
     ├── hosting.test.mjs   ← 8 tests (health server, miroir d'état, DATA_DIR)
     ├── pricing.test.mjs   ← 5 tests (prix fixés, tableau, limites des embeds)
-    ├── price-feed.test.mjs ← 6 tests (lecture des boutiques, garde-fou, priorité des prix)
+    ├── price-feed.test.mjs ← 8 tests (lecture des 3 sites, garde-fou, priorité des prix)
     └── setup.mjs          ← chaque process de test travaille sur une copie temporaire de data/
 ```
 
-**40 tests au total** — `npm test` (node:test, sans dépendance).
+**45 tests au total** — `npm test` (node:test, sans dépendance).
 
 ---
 
@@ -91,24 +91,49 @@ kamas-market-bot/
 
 ### Prix par serveur
 
+Sens des salons (important) : **💎・acheter-kamas** affiche le prix auquel **nous vendons**
+(`buy`), **💸・vendre-kamas** le prix que **nous payons** au client (`sell`).
+
 Prix d'un serveur, par ordre de priorité :
 
-1. **Prix fixé par le staff** (`serverPrices[serveur][sens]`, en EUR/M) — `/rate prix` ou `/rate tableau`.
-2. Sinon **prix web** : prix du marché × pourcentage du sens (`feed.factors`, par défaut
-   achat 100 %, vente 70 %, échange 45 %), arrondi au centime — voir ci-dessous.
-3. Sinon `taux de base × multiplicateur du serveur` (`serverRates`).
+1. **Prix fixé à la main** (`serverPrices[serveur][sens]`, en EUR/M) — `/rate prix` ou `/rate tableau`.
+2. Sinon **prix web** × pourcentage du sens (`feed.factors`) × ajustement du serveur :
+   - achat : **97 %** du concurrent le moins cher (kamasv / 1kamas), arrondi au centime inférieur ;
+   - vente : **103 %** du meilleur rachat (leskamas.com, sinon 70 % du prix de vente),
+     arrondi au centime supérieur ;
+   - échange : 45 % de la médiane du marché.
+   Un concurrent à plus de 15 % de la médiane est ramené à ±15 % (anti-annonce aberrante).
+3. Sinon `taux de base × multiplicateur du serveur` (`serverRates`) × ajustement.
+
+**Ajustement manager** (`adjustments[serveur][sens]`, en %) : `/rate ajuster <sens> <serveurs> <%>`,
+serveurs = `tous`, un jeu (`dofus`, `touch`, `retro`, `wakfu`) ou une liste `drac, ombre`.
+Borné à ±50 %, `0` le retire, ne s'applique pas à un prix fixé à la main.
+
+**Garde-fou de marge** : ce qu'on paie (vente) ne dépasse jamais notre prix de vente − 5 %
+(`MIN_MARGIN`), sauf prix vente fixé à la main. Signalé 🛡️ dans `/rate auto`.
+
+**Comparaison publique** : sous chaque serveur, les panneaux affichent `🏆 -4 % vs KamasV (0,77 €)`
+(achat) ou `🏆 +3 % vs LesKamas (0,52 €)` (vente) — **uniquement** les concurrents qu'on bat,
+et seulement si le dernier relevé a moins de 6 h. Jamais de comparaison défavorable.
+
+**Droits** : toute modification de prix (`/rate set|serveur|prix|tableau|ajuster`, réglages de
+`/rate auto`) est réservée au **manager** (administrateur ou rôle Manager / `MANAGER_ROLE_ID`).
+Le staff peut consulter `/rate auto` sans option.
 
 Les autres devises sont converties avec le ratio des taux de base (ex. USD/EUR de `rates`).
 `/rate prix <serveur> <sens> 0` supprime le prix manuel et rend la main au prix web.
 
 ### Prix web automatiques (`src/price-feed.js`)
 
-Toutes les `PRICE_FEED_INTERVAL_MIN` minutes (30 par défaut, minimum 10), le bot lit l'API publique
-WooCommerce (`/wp-json/wc/store/v1/`) de deux boutiques concurrentes :
+Toutes les `PRICE_FEED_INTERVAL_MIN` minutes (30 par défaut, minimum 10), le bot lit trois sites.
+Deux boutiques qui **vendent** des kamas, via l'API publique WooCommerce (`/wp-json/wc/store/v1/`) :
 
 - **kamasv.com** : un produit par lot (« 10M Kamas Draconiros ») ; le jeu vient de la catégorie racine
   (DOFUS, DOFUS TOUCH, DOFUS RETRO, WAKFU). Prix/M = médiane des lots en stock.
 - **1kamas.com** : un produit variable par jeu, une variation par serveur (prix déjà au million).
+
+Et **leskamas.com**, qui **rachète** des kamas : tableau HTML de `/vendre-des-kamas.html`
+(une ligne « Dofus Touch Kamas » par jeu, colonne Paypal en €/M) → `feed.sellReference`.
 
 Correspondance par nom normalisé + `aliases` de `config.js`, **uniquement dans le même jeu**
 (chaque serveur a un `game`) ; les serveurs saisonniers (Temporis, saisonniers) sont ignorés.
@@ -119,6 +144,11 @@ que s'il est confirmé au relevé suivant ; une boutique en panne garde les dern
 (erreur visible dans `feed.lastError` et `/rate auto`). Si un prix change, panneaux et
 📈・taux-du-jour sont mis à jour. `PRICE_FEED=off` désactive le relevé ; `/rate auto actif:False`
 met les prix web en pause sans redéployer.
+
+**Proxy** (`PRICE_FEED_PROXY=http://user:pass@hôte:port`, secret : `.env` et Render uniquement) :
+par défaut le bot tente en direct et ne passe par le proxy que pour un site qui le bloque
+(403/429/503 ou coupure réseau), pendant 6 h. `PRICE_FEED_PROXY_MODE=always` force le proxy
+partout (≈ 4 Go/mois de trafic proxy facturé). Utilise `undici` (déjà fourni par discord.js).
 
 Chaque changement (`/rate`, `/stock`, `/rate tableau`) met à jour **automatiquement** les 3 panneaux
 marché (édition du message existant) et les 3 messages de `📈・taux-du-jour` (`src/live-board.js`,
@@ -234,8 +264,9 @@ Developer Portal → Reset Token, remplacer dans Render + `.env`, supprimer `~/D
 
 - [ ] **Régénérer le token Discord** (fuité) — voir §5.
 - [x] Prix réels par serveur relevés automatiquement sur le web (`src/price-feed.js`).
-- [ ] **Valider les pourcentages** achat / vente / échange avec le propriétaire (`/rate auto`).
-- [ ] Rubilax (Wakfu) et Talok (Touch) n'ont qu'une seule source : surveiller `/rate auto`.
+- [ ] **Valider les pourcentages** (97 % / 103 % / 45 %) et la marge minimale de 5 % avec le propriétaire.
+- [ ] Rubilax (Wakfu) et Talok (Touch) n'ont qu'une seule source de prix de vente : surveiller `/rate auto`.
+- [ ] Marges faibles quand le rachat ≈ la vente (ex. Mikhal 0,66 / 0,67) : le garde-fou 🛡️ plafonne à -5 % ; décider si on accepte de ne pas battre LesKamas là-bas.
 - [x] Panneaux mis à jour automatiquement (édition des messages existants au démarrage et à chaque changement).
 - [ ] Vérifier le cron cron-job.org pointe bien sur `https://commis-57du.onrender.com/healthz`.
 - [ ] Tester le flux d'achat complet après redéploiement (serveur → paiement → formulaire → salon).
@@ -252,7 +283,7 @@ Idées en attente :
 
 ```sh
 # Local
-npm test                    # 40 tests
+npm test                    # 45 tests
 npm run check               # diagnostic complet (permissions, hiérarchie, inventaire)
 npm run setup:dry           # aperçu du setup sans rien créer
 npm run setup               # crée ce qui manque (idempotent)

@@ -22,24 +22,29 @@ import {
     stockEmbed,
     successEmbed,
 } from "./embeds.js";
-import { isStaff } from "./guild-utils.js";
+import { isManager, isStaff } from "./guild-utils.js";
 import { refreshMarketDisplays } from "./live-board.js";
 import {
+    MAX_ADJUST,
+    competitorEdge,
     effectiveRate,
+    eurPrice,
     formatMillions,
     formatMoney,
     formatPriceTable,
     priceSource,
+    resolveServers,
     serverPriceSummary,
     setFeedEnabled,
     setFeedFactors,
     setRate,
+    setServerAdjustments,
     setServerMultiplier,
     setServerPrice,
     setStock,
 } from "./market.js";
 import { checkGuild, formatChecks } from "./preflight.js";
-import { priceFeedRunning, runPriceFeed } from "./price-feed.js";
+import { priceFeedRunning, proxyStatus, runPriceFeed } from "./price-feed.js";
 import { setupGuild } from "./setup.js";
 import { update } from "./store.js";
 import {
@@ -217,14 +222,14 @@ export const commandData = [
                 .addIntegerOption((option) =>
                     option
                         .setName("achat")
-                        .setDescription("Notre prix de vente au client, en % du marché (100 = prix du marché)")
+                        .setDescription("Notre prix de vente au client, en % du prix des concurrents (100 = pareil)")
                         .setMinValue(10)
                         .setMaxValue(300),
                 )
                 .addIntegerOption((option) =>
                     option
                         .setName("vente")
-                        .setDescription("Ce qu'on paie au vendeur, en % du marché (70 = 70 %)")
+                        .setDescription("Ce qu'on paie au vendeur, en % du prix de rachat des concurrents (100 = pareil)")
                         .setMinValue(10)
                         .setMaxValue(300),
                 )
@@ -237,6 +242,37 @@ export const commandData = [
                 )
                 .addBooleanOption((option) =>
                     option.setName("actualiser").setDescription("Relever les prix maintenant (~30 s)"),
+                ),
+        )
+        .addSubcommand((sub) =>
+            sub
+                .setName("ajuster")
+                .setDescription("Ajuster un peu le prix d'un, plusieurs ou tous les serveurs (manager)")
+                .addStringOption((option) =>
+                    option
+                        .setName("sens")
+                        .setDescription("Quel prix ajuster")
+                        .setRequired(true)
+                        .addChoices(
+                            { name: "Achat (prix auquel on vend, salon acheter-kamas)", value: "buy" },
+                            { name: "Vente (prix qu'on paie, salon vendre-kamas)", value: "sell" },
+                            { name: "Les deux", value: "both" },
+                        ),
+                )
+                .addStringOption((option) =>
+                    option
+                        .setName("serveurs")
+                        .setDescription("« tous », un jeu (dofus, touch, retro, wakfu) ou des noms : drac, ombre, kelerog")
+                        .setRequired(true)
+                        .setMaxLength(300),
+                )
+                .addNumberOption((option) =>
+                    option
+                        .setName("pourcentage")
+                        .setDescription("-2 = 2 % plus bas · +1,5 = 1,5 % plus haut · 0 = retirer l'ajustement")
+                        .setRequired(true)
+                        .setMinValue(-MAX_ADJUST)
+                        .setMaxValue(MAX_ADJUST),
                 ),
         ),
 
@@ -303,6 +339,15 @@ const reply = (interaction, payload) =>
 async function guardStaff(interaction) {
     if (isStaff(interaction.member)) return true;
     await reply(interaction, { embeds: [errorEmbed("Commande réservée au staff.", "🔒 Accès refusé")] });
+    return false;
+}
+
+/** Prices are the manager's call: admins or the Manager role (MANAGER_ROLE_ID). */
+async function guardManager(interaction) {
+    if (isManager(interaction.member)) return true;
+    await reply(interaction, {
+        embeds: [errorEmbed("Seul le manager peut modifier les prix.", "🔒 Accès refusé")],
+    });
     return false;
 }
 
@@ -419,6 +464,59 @@ export async function runCommand(client, interaction) {
         if (sub === "voir") return reply(interaction, { embeds: [rateEmbed()] });
         if (!(await guardStaff(interaction))) return undefined;
 
+        // Staff may look at /rate auto; every change of price is the manager's.
+        const onlyViewing = sub === "auto" && !interaction.options.data[0]?.options?.length;
+        if (!onlyViewing && !(await guardManager(interaction))) return undefined;
+
+        if (sub === "ajuster") {
+            const choice = interaction.options.getString("sens", true);
+            const kinds = choice === "both" ? ["buy", "sell"] : [choice];
+            const { codes, unknown } = resolveServers(interaction.options.getString("serveurs", true));
+            if (unknown.length || !codes.length) {
+                return reply(interaction, {
+                    embeds: [
+                        errorEmbed(
+                            `${unknown.length ? `Serveur(s) inconnu(s) : ${unknown.map((name) => `« ${name} »`).join(", ")}\n` : ""}` +
+                                "Écris « tous », un jeu (dofus, touch, retro, wakfu) ou des noms séparés par des virgules. Rien n'a été modifié.",
+                        ),
+                    ],
+                });
+            }
+
+            const applied = setServerAdjustments(codes, kinds, interaction.options.getNumber("pourcentage", true));
+            refreshMarketDisplays(client);
+
+            const lines = codes.map((code) => {
+                const cells = kinds.map((kind) => {
+                    const price = eurPrice(code, kind);
+                    if (!price) return `${kind === "buy" ? "achat" : "vente"} : à confirmer`;
+                    const beaten = competitorEdge(code, kind).length ? " 🏆" : "";
+                    const flags = `${price.manual ? " 📌 prix manuel prioritaire" : ""}${price.capped ? " 🛡️ plafonné (marge)" : ""}`;
+                    return `${kind === "buy" ? "achat" : "vente"} **${formatMoney(price.eur, "EUR")}/M**${beaten}${flags}`;
+                });
+                return `**${serverLabel(serverByCode(code))}** · ${cells.join(" · ")}`;
+            });
+            const shown = lines.join("\n").length > 3500 ? [...lines.slice(0, 20), `… et ${lines.length - 20} autre(s)`] : lines;
+            const what = kinds.length === 2 ? "achat et vente" : kinds[0] === "buy" ? "achat" : "vente";
+
+            return reply(interaction, {
+                embeds: [
+                    successEmbed(
+                        [
+                            applied === 0
+                                ? `Ajustement **${what}** retiré sur ${codes.length} serveur(s).`
+                                : `Ajustement **${what}** de **${applied > 0 ? "+" : ""}${applied} %** sur ${codes.length} serveur(s).`,
+                            "",
+                            ...shown,
+                            "",
+                            "_🏆 = meilleur qu'au moins un concurrent · les salons se mettent à jour dans quelques secondes._",
+                        ].join("\n"),
+                        "🎚️ Prix ajustés",
+                    ),
+                ],
+            });
+        }
+
         if (sub === "tableau") {
             return interaction.showModal(priceTableModal(formatPriceTable()));
         }
@@ -453,7 +551,11 @@ export async function runCommand(client, interaction) {
             }
 
             if (notes.length) refreshMarketDisplays(client);
-            const status = feedStatusEmbed({ running: priceFeedRunning(), intervalMin: SETTINGS.priceFeedIntervalMin });
+            const status = feedStatusEmbed({
+                running: priceFeedRunning(),
+                intervalMin: SETTINGS.priceFeedIntervalMin,
+                proxy: proxyStatus(),
+            });
             return interaction.editReply({ content: notes.join("\n") || undefined, embeds: [status] });
         }
 

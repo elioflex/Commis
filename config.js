@@ -60,6 +60,10 @@ export const SETTINGS = {
     // Automatic prices read from public kamas shops (see src/price-feed.js).
     priceFeed: str("PRICE_FEED", "on") === "off" ? "off" : "on",
     priceFeedIntervalMin: Math.max(10, int("PRICE_FEED_INTERVAL_MIN", 30)),
+    // http://user:pass@host:port — secret, only in .env / Render, never in the repo.
+    priceFeedProxy: str("PRICE_FEED_PROXY", ""),
+    // fallback = direct first, proxy only for a site that blocks us · always = every request via the proxy
+    priceFeedProxyMode: str("PRICE_FEED_PROXY_MODE", "fallback") === "always" ? "always" : "fallback",
     // Channel that holds the state snapshot; /setup creates « ⚙️・gestion » for it.
     stateChannelId: snowflake("STATE_CHANNEL_ID"),
     stateMirror: str("STATE_MIRROR", "on") === "off" ? "off" : "on",
@@ -130,6 +134,13 @@ export const serverLabel = (server) =>
 export const serverByCode = (code) => DOFUS_SERVERS.find((s) => s.code === code) ?? null;
 export const serverByName = (name) =>
     DOFUS_SERVERS.find((s) => s.name.toLowerCase() === String(name).toLowerCase()) ?? null;
+
+/** Public names of the shops the price feed reads, used to show how we compare. */
+export const COMPETITORS = {
+    kamasv: "KamasV",
+    "1kamas": "1Kamas",
+    leskamas: "LesKamas",
+};
 
 /** Payment methods offered in the ticket modal. */
 export const PAYMENT_METHODS = [

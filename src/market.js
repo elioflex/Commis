@@ -1,4 +1,4 @@
-import { CURRENCIES, currencyInfo, DOFUS_SERVERS, serverByCode, serverByName, serverLabel } from "../config.js";
+import { COMPETITORS, CURRENCIES, currencyInfo, DOFUS_SERVERS, GAMES, serverByCode, serverByName, serverLabel } from "../config.js";
 import { read, setPath, deletePath } from "./store.js";
 
 export const STOCK_STATUS = {
@@ -73,8 +73,31 @@ export function setServerPrice(serverCode, kind, value) {
 
 /* ───────────── automatic prices (filled by src/price-feed.js) ───────────── */
 
-/** Our price as a share of the market price, per kind. Staff change it with `/rate auto`. */
-export const DEFAULT_FEED_FACTORS = { buy: 1, sell: 0.7, exchange: 0.45 };
+/**
+ * Our price as a share of the best competitor, per kind. Managers change it with
+ * `/rate auto`. buy = what we charge (share of the cheapest shop: 0.97 = 3 %
+ * cheaper), sell = what we pay (share of the best payout: 1.03 = 3 % more),
+ * exchange = share of the market's median retail price.
+ */
+export const DEFAULT_FEED_FACTORS = { buy: 0.97, sell: 1.03, exchange: 0.45 };
+
+/** Without a payout source for a server, shops typically pay ~70 % of their retail price. */
+export const RETAIL_TO_PAYOUT = 0.7;
+
+/**
+ * What we pay a seller never goes above our own sale price minus this share,
+ * so an automatic price or an adjustment can't make us lose money on a server.
+ */
+export const MIN_MARGIN = 0.05;
+
+/** A single shop's price counts for "best competitor" only within this share of the median. */
+const BEST_SPREAD = 0.15;
+
+/** Competitor prices are shown publicly only while the last successful fetch is this recent. */
+const COMPARISON_MAX_AGE_MS = 6 * 60 * 60 * 1000;
+
+/** Per-server manager adjustment, in %, is capped to keep a typo from wrecking prices. */
+export const MAX_ADJUST = 50;
 
 export const feedState = () => read("market.json").feed ?? {};
 
@@ -90,7 +113,7 @@ export function setFeedEnabled(enabled) {
     return Boolean(enabled);
 }
 
-/** `factors` = { buy?, sell?, exchange? } as shares (0.7 = 70 % of the market price). */
+/** `factors` = { buy?, sell?, exchange? } as shares (0.97 = 97 % of the best competitor). */
 export function setFeedFactors(factors) {
     for (const kind of RATE_KINDS) {
         const value = factors?.[kind];
@@ -102,19 +125,125 @@ export function setFeedFactors(factors) {
     return feedFactors();
 }
 
+const positive = (value) => (typeof value === "number" && Number.isFinite(value) && value > 0 ? value : null);
+
 /** Market reference in EUR/M (median of the shops read by the feed), or null. */
 export function marketReference(serverCode) {
-    const value = feedState().reference?.[serverCode]?.eur;
-    return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : null;
+    return positive(feedState().reference?.[serverCode]?.eur);
 }
 
-/** Automatic EUR price: market reference × our factor for this kind, rounded to the cent. */
-export function autoPrice(serverCode, kind) {
+/** What shops pay players for this server, in EUR/M: leskamas.com, else estimated from retail. */
+export function payoutReference(serverCode) {
+    const value = positive(feedState().sellReference?.[serverCode]?.eur);
+    if (value !== null) return value;
+    const retail = marketReference(serverCode);
+    return retail === null ? null : Math.round(retail * RETAIL_TO_PAYOUT * 10_000) / 10_000;
+}
+
+/**
+ * Each competitor's price for this server, as last read by the feed:
+ * `{ kamasv: 0.77, "1kamas": 0.8 }` for buy (what they charge), `{ leskamas: 0.52 }`
+ * for sell (what they pay). Empty for exchange, which no shop publishes.
+ */
+export function competitorPrices(serverCode, kind) {
+    const entry = kind === "buy" ? feedState().reference?.[serverCode] : kind === "sell" ? feedState().sellReference?.[serverCode] : null;
+    const prices = {};
+    for (const [site, value] of Object.entries(entry?.sources ?? {})) {
+        if (positive(value) !== null) prices[site] = value;
+    }
+    return prices;
+}
+
+/**
+ * The price to beat: the cheapest shop for buy, the best payout for sell. A shop
+ * far from the others (bad listing, typo on their site) is pulled back to the
+ * median ± 15 % so one outlier can't drag our price with it.
+ */
+export function bestCompetitorPrice(serverCode, kind) {
+    const median = kind === "sell" ? payoutReference(serverCode) : marketReference(serverCode);
+    if (median === null) return null;
+    const values = Object.values(competitorPrices(serverCode, kind));
+    if (!values.length) return median;
+    if (kind === "sell") return Math.min(Math.max(...values), median * (1 + BEST_SPREAD));
+    return Math.max(Math.min(...values), median * (1 - BEST_SPREAD));
+}
+
+/**
+ * Round to the cent in the customer's favour, so a small edge never rounds back
+ * to the competitor's price: down for what we charge, up for what we pay.
+ */
+function roundForCustomer(value, kind) {
+    const cents = kind === "sell" ? Math.ceil(value * 100 - 1e-9) : Math.floor(value * 100 + 1e-9);
+    return Math.max(0.01, cents / 100);
+}
+
+/** Automatic EUR price, before the manager's per-server adjustment. */
+function webPrice(serverCode, kind) {
     if (!feedEnabled()) return null;
-    const reference = marketReference(serverCode);
     const factor = feedFactors()[kind];
+    const reference = kind === "exchange" ? marketReference(serverCode) : bestCompetitorPrice(serverCode, kind);
     if (reference === null || !(factor > 0)) return null;
-    return Math.max(0.01, Math.round(reference * factor * 100) / 100);
+    return reference * factor;
+}
+
+/** Manager's fine-tuning for one server and kind, in % (-2 = 2 % lower). 0 when not set. */
+export function serverAdjustment(serverCode, kind) {
+    const value = Number(read("market.json").adjustments?.[serverCode]?.[kind]);
+    return Number.isFinite(value) ? value : 0;
+}
+
+/** Set (or clear with 0) the adjustment of several servers for several kinds at once. */
+export function setServerAdjustments(serverCodes, kinds, percent) {
+    const value = Math.round(Math.max(-MAX_ADJUST, Math.min(MAX_ADJUST, Number(percent) || 0)) * 100) / 100;
+    for (const code of serverCodes) {
+        for (const kind of kinds) {
+            if (value === 0) deletePath("market.json", `adjustments.${code}.${kind}`);
+            else setPath("market.json", `adjustments.${code}.${kind}`, value);
+        }
+    }
+    setRatesUpdated();
+    return value;
+}
+
+const simplify = (text) =>
+    String(text ?? "")
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .toLowerCase()
+        .replace(/[^a-z0-9]/g, "");
+
+/**
+ * Turn what a manager types into server codes: "tous", a game ("dofus", "touch",
+ * "retro", "wakfu") or names separated by commas ("drac, ombre, kelerog").
+ */
+export function resolveServers(text) {
+    const priced = DOFUS_SERVERS.filter((server) => server.game);
+    const codes = new Set();
+    const unknown = [];
+    for (const part of String(text ?? "").split(/[,;+\n]/)) {
+        const key = simplify(part);
+        if (!key) continue;
+        if (["tous", "tout", "all", "touslesserveurs"].includes(key)) {
+            for (const server of priced) codes.add(server.code);
+            continue;
+        }
+        const game = Object.entries(GAMES).find(([id, info]) => key === id || key === simplify(info.label) || key === simplify(info.short));
+        if (game) {
+            for (const server of priced.filter((s) => s.game === game[0])) codes.add(server.code);
+            continue;
+        }
+        const server = priced.find((s) => [s.code, s.name, ...(s.aliases ?? [])].some((name) => simplify(name) === key));
+        if (server) codes.add(server.code);
+        else unknown.push(part.trim());
+    }
+    return { codes: [...codes], unknown };
+}
+
+/** Automatic EUR price: best competitor × our factor × the server's adjustment, rounded for the customer. */
+export function autoPrice(serverCode, kind) {
+    const web = webPrice(serverCode, kind);
+    if (web === null) return null;
+    return roundForCustomer(web * (1 + serverAdjustment(serverCode, kind) / 100), kind);
 }
 
 /** Where a server's price comes from: "manuel" (pinned by staff), "auto" (web) or "base". */
@@ -136,20 +265,65 @@ function currencyRatio(currency, kind) {
     return eur && other ? other / eur : null;
 }
 
+/** EUR price before the margin guard: manual, else web, else base × multiplier × adjustment. */
+function rawEurPrice(serverCode, kind) {
+    const manual = serverCode ? serverPrice(serverCode, kind) : null;
+    if (manual !== null) return { eur: manual, manual: true };
+    const auto = serverCode ? autoPrice(serverCode, kind) : null;
+    if (auto !== null) return { eur: auto, manual: false };
+    const base = rateFor("EUR", kind);
+    if (base === null) return null;
+    const adjusted = base * serverMultiplier(serverCode) * (1 + serverAdjustment(serverCode, kind) / 100);
+    return { eur: Math.round(adjusted * 1000) / 1000, manual: false };
+}
+
+/**
+ * The EUR price actually used. What we pay (sell) is capped at our own sale price
+ * minus MIN_MARGIN, unless staff pinned the sell price by hand. `capped` tells
+ * the staff views that the guard kicked in.
+ */
+export function eurPrice(serverCode, kind) {
+    const raw = rawEurPrice(serverCode, kind);
+    if (!raw || kind !== "sell" || raw.manual || !serverCode) return raw && { ...raw, capped: false };
+    const buy = rawEurPrice(serverCode, "buy");
+    if (!buy) return { ...raw, capped: false };
+    const ceiling = Math.floor(buy.eur * (1 - MIN_MARGIN) * 100 + 1e-9) / 100;
+    return raw.eur > ceiling ? { eur: ceiling, manual: false, capped: true } : { ...raw, capped: false };
+}
+
 /**
  * The price actually charged, in order: a price pinned by staff, the automatic
  * web price, then base rate × multiplier. EUR prices are converted to other
  * currencies with the base-rate ratio, so the owner's spread per currency holds.
  */
 export function effectiveRate(currency, kind, serverCode) {
-    const fixed = serverCode ? serverPrice(serverCode, kind) ?? autoPrice(serverCode, kind) : null;
-    if (fixed !== null) {
-        const ratio = currencyRatio(currency, kind);
-        return ratio === null ? null : Math.round(fixed * ratio * 1000) / 1000;
+    if (!serverCode) {
+        const base = rateFor(currency, kind);
+        return base === null ? null : Math.round(base * 1000) / 1000;
     }
-    const base = rateFor(currency, kind);
-    if (base === null) return null;
-    return Math.round(base * serverMultiplier(serverCode) * 1000) / 1000;
+    const price = eurPrice(serverCode, kind);
+    if (!price) return null;
+    const ratio = currencyRatio(currency, kind);
+    return ratio === null ? null : Math.round(price.eur * ratio * 1000) / 1000;
+}
+
+/**
+ * How we compare with each competitor, only where we are better and only while
+ * the competitors' prices are fresh: `[{ site, price, gap }]`, gap in % (always
+ * positive: how much cheaper we sell, or how much more we pay).
+ */
+export function competitorEdge(serverCode, kind) {
+    if (kind === "exchange" || !feedEnabled()) return [];
+    const fetchedAt = Date.parse(feedState().fetchedAt ?? "");
+    if (!Number.isFinite(fetchedAt) || Date.now() - fetchedAt > COMPARISON_MAX_AGE_MS) return [];
+    const ours = eurPrice(serverCode, kind)?.eur;
+    if (!positive(ours)) return [];
+
+    return Object.entries(competitorPrices(serverCode, kind))
+        .map(([site, price]) => ({ site, price, gap: kind === "sell" ? (ours - price) / price : (price - ours) / price }))
+        .filter(({ gap }) => gap > 0)
+        .map((entry) => ({ ...entry, gap: Math.round(entry.gap * 1000) / 10 }))
+        .sort((a, b) => b.gap - a.gap);
 }
 
 /** "1,55 € · 1,67 $ · 1,32 £ · 16,68 DH · 1,73 ₮" for one server and kind. */
@@ -236,6 +410,23 @@ export function parseMillions(input) {
     return value;
 }
 
+const formatGap = (gap) => gap.toLocaleString("fr-FR", { maximumFractionDigits: gap < 10 ? 1 : 0 });
+
+/**
+ * "🏆 -4 % vs KamasV (0,77 €) · -8 % vs 1Kamas (0,80 €)" under a server on the
+ * buy side, "🏆 +6 % vs LesKamas (0,52 €)" on the sell side. Null when we don't
+ * beat anyone there: we never show a comparison that makes us look worse.
+ */
+export function edgeLine(serverCode, kind) {
+    const edges = competitorEdge(serverCode, kind);
+    if (!edges.length) return null;
+    const sign = kind === "sell" ? "+" : "-";
+    const cells = edges.map(
+        ({ site, price, gap }) => `${sign}${formatGap(gap)} % vs ${COMPETITORS[site] ?? site} (${formatMoney(price, "EUR")})`,
+    );
+    return `  🏆 ${cells.join(" · ")}`;
+}
+
 /**
  * Two lines per Dofus server: name (+ stock for buy/exchange), then its price
  * in every currency. Buy/exchange: in-stock servers first, cheapest first.
@@ -248,6 +439,7 @@ export function serverRateLines(kind) {
 
     const showStock = kind !== "sell";
     const rows = DOFUS_SERVERS.map((server) => ({
+        code: server.code,
         name: serverLabel(server),
         price: effectiveRate("EUR", kind, server.code) ?? Number.POSITIVE_INFINITY,
         summary: serverPriceSummary(kind, server.code),
@@ -264,11 +456,13 @@ export function serverRateLines(kind) {
         return b.price - a.price || a.name.localeCompare(b.name);
     });
 
-    return rows.map(({ name, summary, stock }) => {
-        if (!showStock) return `**${name}**\n└ ${summary}`;
+    return rows.map(({ code, name, summary, stock }) => {
+        const edge = edgeLine(code, kind);
+        const tail = edge ? `\n${edge}` : "";
+        if (!showStock) return `**${name}**\n└ ${summary}${tail}`;
         const marker = stock.status === "open" ? "🟢" : stock.status === "low" ? "🟡" : "🔴";
         const stockText = stock.status === "full" ? "complet" : formatMillions(stock.millions);
-        return `${marker} **${name}** · ${stockText}\n└ ${summary}`;
+        return `${marker} **${name}** · ${stockText}\n└ ${summary}${tail}`;
     });
 }
 

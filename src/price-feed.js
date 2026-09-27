@@ -1,41 +1,108 @@
+import { ProxyAgent, fetch as proxyFetch } from "undici";
+
 import { DOFUS_SERVERS, SETTINGS } from "../config.js";
 import { refreshMarketDisplays } from "./live-board.js";
-import { marketReference } from "./market.js";
 import { read, update } from "./store.js";
 
 /**
  * Automatic market prices, read from public kamas shops.
  *
- * Both shops run WooCommerce, whose Store API (`/wp-json/wc/store/v1/`) is the
- * public JSON behind their product pages — the same prices a visitor sees,
- * without depending on the HTML layout. Their robots.txt allow it. We identify
- * ourselves, fetch sequentially and only every `PRICE_FEED_INTERVAL_MIN`.
+ * - kamasv.com and 1kamas.com SELL kamas. They run WooCommerce, whose Store API
+ *   (`/wp-json/wc/store/v1/`) is the public JSON behind their product pages.
+ *   Their median is the retail reference → `feed.reference`.
+ * - leskamas.com BUYS kamas from players; its price list is a plain HTML table.
+ *   That payout is our sell reference → `feed.sellReference`.
  *
- * Result: `market.json` → `feed.reference[serverCode] = { eur, sources }`, the
- * median EUR price per million across shops. `market.js` turns it into our
- * buy / sell / exchange prices with the staff factors.
+ * We fetch sequentially and only every `PRICE_FEED_INTERVAL_MIN`. When a site
+ * blocks direct requests (Cloudflare 403/429…), requests to that host go
+ * through `PRICE_FEED_PROXY` for a while — or always, with PRICE_FEED_PROXY_MODE.
+ *
+ * `market.js` turns both references into our buy / sell / exchange prices with
+ * the staff factors.
  */
 
 const USER_AGENT = "CommisPriceBot/1.0 (Discord bot; prix de reference, 1 passage / 30 min)";
+// Through a residential proxy a bot user-agent would be blocked all the same.
+const BROWSER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0 Safari/537.36";
 const REQUEST_TIMEOUT_MS = 15_000;
 const REQUEST_GAP_MS = 400;
 /** A price that moves more than this between two fetches must be confirmed by the next one. */
 const MAX_JUMP = 0.5;
 
+/** `kind`: "retail" = price the shop sells at · "payout" = price the shop pays players. */
 export const SOURCES = [
-    { id: "kamasv", label: "kamasv.com", base: "https://kamasv.com" },
-    { id: "1kamas", label: "1kamas.com", base: "https://1kamas.com" },
+    { id: "kamasv", label: "kamasv.com", base: "https://kamasv.com", kind: "retail" },
+    { id: "1kamas", label: "1kamas.com", base: "https://1kamas.com", kind: "retail" },
+    { id: "leskamas", label: "leskamas.com", base: "https://www.leskamas.com", kind: "payout" },
 ];
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-async function defaultFetchJson(url) {
-    const response = await fetch(url, {
-        headers: { "User-Agent": USER_AGENT, Accept: "application/json" },
+/* ───────────────────────── HTTP (direct, proxy on block) ───────────────────────── */
+
+/** Statuses that mean "we are being blocked", worth retrying through the proxy. */
+const BLOCKED_STATUSES = new Set([403, 429, 503]);
+const PROXY_STICKY_MS = 6 * 60 * 60_000;
+
+let proxyAgent = null;
+const proxiedHosts = new Map(); // host → timestamp until which we go through the proxy
+
+function getProxyAgent() {
+    if (!SETTINGS.priceFeedProxy) return null;
+    proxyAgent ??= new ProxyAgent(SETTINGS.priceFeedProxy);
+    return proxyAgent;
+}
+
+/** Hosts currently routed through the proxy (for `/rate auto`). Never exposes the proxy itself. */
+export function proxyStatus() {
+    const now = Date.now();
+    const hosts = [...proxiedHosts].filter(([, until]) => until > now).map(([host]) => host);
+    return { configured: Boolean(SETTINGS.priceFeedProxy), mode: SETTINGS.priceFeedProxyMode, hosts };
+}
+
+async function request(url, accept, viaProxy) {
+    const options = {
+        headers: { "User-Agent": viaProxy ? BROWSER_AGENT : USER_AGENT, Accept: accept },
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-    });
-    if (!response.ok) throw new Error(`HTTP ${response.status} sur ${new URL(url).host}`);
+    };
+    const response = viaProxy
+        ? await proxyFetch(url, { ...options, dispatcher: getProxyAgent() })
+        : await fetch(url, options);
+    if (!response.ok) {
+        const error = new Error(`HTTP ${response.status} sur ${new URL(url).host}${viaProxy ? " (via proxy)" : ""}`);
+        error.blocked = BLOCKED_STATUSES.has(response.status);
+        throw error;
+    }
+    return response;
+}
+
+/** GET with automatic fallback to the proxy when a host blocks direct requests. */
+async function httpGet(url, accept) {
+    const host = new URL(url).host;
+    const proxy = getProxyAgent();
+    const sticky = (proxiedHosts.get(host) ?? 0) > Date.now();
+
+    if (proxy && (SETTINGS.priceFeedProxyMode === "always" || sticky)) return request(url, accept, true);
+
+    try {
+        return await request(url, accept, false);
+    } catch (error) {
+        // Network errors (no .blocked) are also retried: a firewall drop looks like a timeout.
+        if (!proxy || error.blocked === false) throw error;
+        const response = await request(url, accept, true);
+        proxiedHosts.set(host, Date.now() + PROXY_STICKY_MS);
+        console.warn(`[price-feed] ${host} bloque les requêtes directes → proxy pendant 6 h`);
+        return response;
+    }
+}
+
+async function defaultFetchJson(url) {
+    const response = await httpGet(url, "application/json");
     return { data: await response.json(), totalPages: Number(response.headers.get("x-wp-totalpages")) || 1 };
+}
+
+async function defaultFetchText(url) {
+    return (await httpGet(url, "text/html")).text();
 }
 
 /* ───────────────────────── matching ───────────────────────── */
@@ -149,6 +216,34 @@ export function kamasVariationTargets(products) {
     return targets;
 }
 
+/**
+ * leskamas.com « vendre des kamas »: one HTML table, a colspan row per game
+ * ("Dofus Touch Kamas") then one row per server: name, Paypal €/M, …, status.
+ * The Paypal/SEPA column is the payout in EUR per million.
+ */
+export function parseLeskamas(html) {
+    const table = String(html ?? "").match(/<table[^>]*hovertable[\s\S]*?<\/table>/i)?.[0] ?? "";
+    const prices = {};
+    let game = null;
+
+    for (const row of table.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi)) {
+        const cells = [...row[1].matchAll(/<td([^>]*)>([\s\S]*?)<\/td>/gi)].map(([, attrs, inner]) => ({
+            attrs,
+            text: decodeEntities(inner.replace(/<[^>]*>/g, "")).trim(),
+        }));
+        if (cells.length === 1 && /colspan/i.test(cells[0].attrs)) {
+            game = gameFromTitle(cells[0].text);
+            continue;
+        }
+        if (cells.length < 2) continue;
+
+        const code = matchServer(game, cells[0].text);
+        const price = Number.parseFloat(cells[1].text.replace(",", "."));
+        if (code && /€\s*\/\s*M/i.test(cells[1].text) && price > 0) prices[code] = round4(price);
+    }
+    return prices;
+}
+
 const round4 = (value) => (value === null ? null : Math.round(value * 10_000) / 10_000);
 
 async function fetchAllPages(fetchJson, url) {
@@ -162,12 +257,15 @@ async function fetchAllPages(fetchJson, url) {
 }
 
 const readers = {
-    async kamasv(fetchJson, base) {
+    async leskamas({ fetchText }, base) {
+        return parseLeskamas(await fetchText(`${base}/vendre-des-kamas.html`));
+    },
+    async kamasv({ fetchJson }, base) {
         const categories = await fetchAllPages(fetchJson, `${base}/wp-json/wc/store/v1/products/categories`);
         const products = await fetchAllPages(fetchJson, `${base}/wp-json/wc/store/v1/products`);
         return parseKamasv(products, categories);
     },
-    async "1kamas"(fetchJson, base) {
+    async "1kamas"({ fetchJson }, base) {
         const products = await fetchAllPages(fetchJson, `${base}/wp-json/wc/store/v1/products`);
         const prices = {};
         for (const { id, code } of kamasVariationTargets(products)) {
@@ -228,55 +326,71 @@ let timer = null;
 let inFlight = null;
 
 /** Fetch every source, update market.json. Never throws. */
-export async function runPriceFeed({ client = null, fetchJson = defaultFetchJson, sources = SOURCES } = {}) {
+export async function runPriceFeed({
+    client = null,
+    fetchJson = defaultFetchJson,
+    fetchText = defaultFetchText,
+    sources = SOURCES,
+} = {}) {
     if (inFlight) return inFlight;
 
     inFlight = (async () => {
-        const bySource = {};
+        const byKind = { retail: {}, payout: {} };
         const errors = [];
 
         for (const source of sources) {
             try {
-                const prices = await readers[source.id](fetchJson, source.base);
-                if (Object.keys(prices).length) bySource[source.id] = prices;
+                const prices = await readers[source.id]({ fetchJson, fetchText }, source.base);
+                if (Object.keys(prices).length) byKind[source.kind ?? "retail"][source.id] = prices;
                 else errors.push(`${source.label} : aucun prix reconnu`);
             } catch (error) {
-                errors.push(`${source.label} : ${error.message}`);
+                // undici hides the reason behind "fetch failed": show ECONNREFUSED, 407 proxy auth, etc.
+                const cause = error.cause?.code ?? error.cause?.message;
+                errors.push(`${source.label} : ${error.message}${cause ? ` (${cause})` : ""}`);
             }
         }
 
         const now = new Date().toISOString();
         const feed = read("market.json").feed ?? {};
+        const lastError = errors.length ? errors.join(" • ") : null;
 
-        if (!Object.keys(bySource).length) {
+        if (!Object.keys(byKind.retail).length && !Object.keys(byKind.payout).length) {
             update("market.json", (data) => {
-                data.feed = { ...(data.feed ?? {}), lastAttemptAt: now, lastError: errors.join(" • ") };
+                data.feed = { ...(data.feed ?? {}), lastAttemptAt: now, lastError };
                 return true;
             });
-            console.warn(`[price-feed] aucune source disponible — ${errors.join(" • ")}`);
+            console.warn(`[price-feed] aucune source disponible — ${lastError}`);
             return { ok: false, changed: 0, errors, held: [] };
         }
 
-        const { reference, pending, held } = buildReference(bySource, feed.reference ?? {}, feed.pending ?? {});
-        const changed = Object.keys(reference).filter((code) => reference[code]?.eur !== marketReference(code)).length;
+        // A kind with no working source this round keeps its previous prices untouched.
+        const retail = buildReference(byKind.retail, feed.reference ?? {}, feed.pending ?? {});
+        const payout = buildReference(byKind.payout, feed.sellReference ?? {}, feed.sellPending ?? {});
+        const changedIn = (next, previous = {}) =>
+            Object.keys(next).filter((code) => next[code]?.eur !== previous[code]?.eur).length;
+        const changed = changedIn(retail.reference, feed.reference) + changedIn(payout.reference, feed.sellReference);
+        const held = [...retail.held, ...payout.held.map((code) => `${code} (rachat)`)];
 
         update("market.json", (data) => {
             data.feed = {
                 ...(data.feed ?? {}),
-                reference,
-                pending,
+                reference: retail.reference,
+                pending: retail.pending,
+                sellReference: payout.reference,
+                sellPending: payout.pending,
                 lastAttemptAt: now,
                 fetchedAt: now,
-                lastError: errors.length ? errors.join(" • ") : null,
+                lastError,
             };
             if (changed) data.updatedAt = now;
             return true;
         });
 
         console.info(
-            `[price-feed] ${Object.keys(reference).length} serveur(s), ${changed} prix modifié(s)` +
-                `${held.length ? `, ${held.length} bloqué(s) en attente de confirmation (${held.join(", ")})` : ""}` +
-                `${errors.length ? ` — ${errors.join(" • ")}` : ""}`,
+            `[price-feed] ${Object.keys(retail.reference).length} prix de vente, ` +
+                `${Object.keys(payout.reference).length} prix de rachat, ${changed} modifié(s)` +
+                `${held.length ? `, en attente de confirmation : ${held.join(", ")}` : ""}` +
+                `${lastError ? ` — ${lastError}` : ""}`,
         );
 
         if (changed && client) refreshMarketDisplays(client);
@@ -296,7 +410,10 @@ export function startPriceFeed(client) {
     void runPriceFeed({ client });
     timer = setInterval(() => void runPriceFeed({ client }), everyMs);
     timer.unref?.();
-    console.info(`[price-feed] actif — ${SOURCES.map((s) => s.label).join(" + ")}, toutes les ${SETTINGS.priceFeedIntervalMin} min`);
+    const proxy = SETTINGS.priceFeedProxy ? ` · proxy ${SETTINGS.priceFeedProxyMode === "always" ? "systématique" : "en secours"}` : "";
+    console.info(
+        `[price-feed] actif — ${SOURCES.map((source) => source.label).join(" + ")}, toutes les ${SETTINGS.priceFeedIntervalMin} min${proxy}`,
+    );
     return true;
 }
 
