@@ -63,7 +63,7 @@ export async function handleInteraction(client, interaction) {
     try {
         if (interaction.isChatInputCommand()) return await runCommand(client, interaction);
         if (interaction.isButton()) return await handleButton(client, interaction);
-        if (interaction.isStringSelectMenu()) return await handleSelect(client, interaction);
+        if (interaction.isStringSelectMenu()) return await handleSelect(interaction);
         if (interaction.isUserSelectMenu()) return await handleUserSelect(interaction);
         if (interaction.isModalSubmit()) return await handleModal(client, interaction);
         return undefined;
