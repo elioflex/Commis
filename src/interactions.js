@@ -64,7 +64,7 @@ export async function handleInteraction(client, interaction) {
         if (interaction.isChatInputCommand()) return await runCommand(client, interaction);
         if (interaction.isButton()) return await handleButton(client, interaction);
         if (interaction.isStringSelectMenu()) return await handleSelect(client, interaction);
-        if (interaction.isUserSelectMenu()) return await handleUserSelect(client, interaction);
+        if (interaction.isUserSelectMenu()) return await handleUserSelect(interaction);
         if (interaction.isModalSubmit()) return await handleModal(client, interaction);
         return undefined;
     } catch (error) {
@@ -261,7 +261,7 @@ async function handleTicketButton(client, interaction, rest) {
 
 /* ───────────────────────── selects ───────────────────────── */
 
-async function handleSelect(interaction, customId) {
+async function handleSelect(interaction) {
     const [scope, ...rest] = interaction.customId.split(":");
 
     if (scope === "flow" && rest[0] === "srv") {
