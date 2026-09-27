@@ -1,0 +1,54 @@
+# Blueprint Render — déploie le bot en un clic.
+#
+#   1. pousse ce dépôt sur GitHub
+#   2. Render Dashboard → New → Blueprint → choisis le dépôt
+#   3. Render lit ce fichier et crée le service web « commis » (plan gratuit)
+#   4. renseigne DISCORD_TOKEN et GUILD_ID dans l'onglet Environment
+#
+# Les deux valeurs marquées `sync: false` ne sont PAS dans le dépôt : Render les
+# demande dans l'interface. Ne mets jamais de token en clair ici — un token
+# poussé sur GitHub est détecté et révoqué automatiquement par Discord.
+
+services:
+  - type: web
+    name: commis
+    runtime: node
+    plan: free
+    region: frankfurt
+    branch: main
+    buildCommand: npm install
+    startCommand: npm start
+    # Le bot expose /healthz (voir src/health.js) : Render s'en sert comme
+    # health check, et un cron externe s'en sert pour l'empêcher de s'endormir.
+    healthCheckPath: /healthz
+    envVars:
+      - key: DISCORD_TOKEN
+        sync: false
+      - key: GUILD_ID
+        sync: false
+
+      # ── marque ──
+      - key: BRAND_NAME
+        value: Le Comptoir des Kamas
+      - key: BRAND_EMOJI
+        value: 🏪
+      - key: BRAND_BOT_NAME
+        value: Commis
+
+      # ── comportement ──
+      - key: STAFF_ROLE_NAME
+        value: Staff
+      - key: TICKET_CLOSE_ACTION
+        value: delete
+      - key: MAX_OPEN_TICKETS_PER_USER
+        value: "1"
+      - key: SETUP_STEP_DELAY_MS
+        value: "1500"
+
+      # ── état (le disque Render est effacé à chaque redéploiement) ──
+      # Le bot republie un instantané dans « ⚙️・gestion » et le réimporte au boot.
+      # STATE_IMPORT=always force la réimportation même si l'état local n'est pas vide.
+      - key: STATE_MIRROR
+        value: on
+      - key: STATE_IMPORT
+        value: always

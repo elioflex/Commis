@@ -1,0 +1,23 @@
+{
+  "name": "kamas-market-bot",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Discord ticket bot for a Dofus kamas marketplace (buy / sell / exchange / support / refund).",
+  "type": "module",
+  "engines": {
+    "node": ">=18.17"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test",
+    "deploy": "node src/deploy-commands.js",
+    "setup": "node src/scripts/setup-server.js",
+    "setup:full": "node src/scripts/setup-server.js --with-payment-roles",
+    "setup:dry": "node src/scripts/setup-server.js --dry-run",
+    "check": "node src/scripts/setup-server.js --check"
+  },
+  "dependencies": {
+    "discord.js": "^14.16.3",
+    "dotenv": "^16.4.5"
+  }
+}

@@ -1,0 +1,6 @@
+node_modules/
+.env
+data/tickets.json
+data/reviews.json
+data/panels.json
+data/*.tmp
