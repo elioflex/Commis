@@ -11,7 +11,7 @@ import {
     serverByCode,
     serverLabel,
 } from "../config.js";
-import { panelRow, priceTableModal, reviewModal } from "./components.js";
+import { panelRow, priceTableModal } from "./components.js";
 import {
     errorEmbed,
     feedStatusEmbed,
@@ -26,9 +26,11 @@ import { isManager, isStaff } from "./guild-utils.js";
 import { refreshGuide, refreshMarketDisplays } from "./live-board.js";
 import {
     MAX_ADJUST,
+    MAX_EXCHANGE_FEE,
     competitorEdge,
     effectiveRate,
     eurPrice,
+    exchangeQuote,
     formatMillions,
     formatMoney,
     formatPriceTable,
@@ -36,6 +38,7 @@ import {
     resolveServers,
     serverPriceSummary,
     setFeedEnabled,
+    setExchangeFee,
     setFeedFactors,
     setRate,
     setServerAdjustments,
@@ -68,7 +71,7 @@ const RATE_KIND_CHOICES = [
 const STOCK_STATUS_CHOICES = [
     { name: "🟢 Disponible", value: "open" },
     { name: "🟡 Stock limité", value: "low" },
-    { name: "🔴 Complet", value: "full" },
+    { name: "🕐 Sur commande (pas de stock, on prend quand même)", value: "full" },
 ];
 
 const RATE_KINDS_PREVIEW = ["buy", "sell", "exchange"];
@@ -246,6 +249,19 @@ export const commandData = [
         )
         .addSubcommand((sub) =>
             sub
+                .setName("commission")
+                .setDescription("Commission prise sur les échanges inter-serveurs (manager)")
+                .addNumberOption((option) =>
+                    option
+                        .setName("pourcentage")
+                        .setDescription("10 = on garde 10 % de la valeur échangée")
+                        .setRequired(true)
+                        .setMinValue(0)
+                        .setMaxValue(MAX_EXCHANGE_FEE),
+                ),
+        )
+        .addSubcommand((sub) =>
+            sub
                 .setName("ajuster")
                 .setDescription("Ajuster un peu le prix d'un, plusieurs ou tous les serveurs (manager)")
                 .addStringOption((option) =>
@@ -303,7 +319,6 @@ export const commandData = [
                 ),
         ),
 
-    new SlashCommandBuilder().setName("avis").setDescription("Laisser un avis sur ta dernière commande"),
 
     new SlashCommandBuilder()
         .setName("setup")
@@ -393,10 +408,6 @@ export async function runCommand(client, interaction) {
         return reply(interaction, {
             embeds: [successEmbed(`Panneau **${type.label}** publié dans ${interaction.channel}.`, "✅ Panneau posté")],
         });
-    }
-
-    if (commandName === "avis") {
-        return interaction.showModal(reviewModal());
     }
 
     if (commandName === "check") {
@@ -513,6 +524,31 @@ export async function runCommand(client, interaction) {
                             "_🏆 = meilleur qu'au moins un concurrent · les salons se mettent à jour dans quelques secondes._",
                         ].join("\n"),
                         "🎚️ Prix ajustés",
+                    ),
+                ],
+            });
+        }
+
+        if (sub === "commission") {
+            const fee = setExchangeFee(interaction.options.getNumber("pourcentage", true));
+            refreshMarketDisplays(client);
+            void refreshGuide(client);
+            const [from, to] = DOFUS_SERVERS;
+            const example = from && to ? exchangeQuote(from.code, to.code, 1000) : null;
+            return reply(interaction, {
+                embeds: [
+                    successEmbed(
+                        [
+                            `Commission sur les échanges : **${fee.toLocaleString("fr-FR")} %**`,
+                            example
+                                ? `Exemple : 1 000 M donnés sur ${serverLabel(from)} → **${formatMillions(example.received)}** reçus sur ${serverLabel(to)}`
+                                : null,
+                            "",
+                            "_Reçu = donné × (valeur source ÷ valeur destination) × (1 − commission). Valeur = notre prix de vente sur le serveur._",
+                        ]
+                            .filter((line) => line !== null)
+                            .join("\n"),
+                        "♻️ Commission enregistrée",
                     ),
                 ],
             });

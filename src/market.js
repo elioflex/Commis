@@ -4,8 +4,15 @@ import { read, setPath, deletePath } from "./store.js";
 export const STOCK_STATUS = {
     open: { label: "🟢 Disponible", color: 0x57f287 },
     low: { label: "🟡 Stock limité", color: 0xf5b301 },
-    full: { label: "🔴 Complet", color: 0xed4245 },
+    // No stock right now: we still take the order and deliver once it's in. Never "complet".
+    full: { label: "🕐 Sur commande", color: 0x5865f2 },
 };
+
+/** "🟢 250 M" / "🟡 20 M" / "🕐 sur commande" — what customers see for a server's stock. */
+export function stockBadge(stock) {
+    if (stock.status === "full") return "🕐 sur commande";
+    return `${stock.status === "open" ? "🟢" : "🟡"} ${formatMillions(stock.millions)}`;
+}
 
 /** `buy` = we sell kamas to the customer, `sell` = we buy from them, `exchange` = cross-server. */
 export const RATE_KINDS = ["buy", "sell", "exchange"];
@@ -364,16 +371,46 @@ export function setStock(serverCode, millions, status) {
 export function quote(kind, millions, rate) {
     if (typeof rate !== "number" || !Number.isFinite(rate)) return null;
     if (typeof millions !== "number" || !Number.isFinite(millions) || millions <= 0) return null;
-    const total = millions * rate;
-    // Discount scale used by most marketplaces: bigger lots get a small rebate.
-    const discount = kind === "echange" && millions >= 100 ? 0.1 : 0;
-    return {
-        kind,
-        millions,
-        rate,
-        discount,
-        total: total * (1 - discount),
-    };
+    return { kind, millions, rate, total: millions * rate };
+}
+
+/* ───────────── cross-server exchange ───────────── */
+
+/** Our cut on an exchange, in %, stored in market.json as `exchangeFee`. */
+export const DEFAULT_EXCHANGE_FEE = 10;
+export const MAX_EXCHANGE_FEE = 50;
+
+export function exchangeFee() {
+    const value = Number(read("market.json").exchangeFee);
+    return Number.isFinite(value) && value >= 0 && value <= MAX_EXCHANGE_FEE ? value : DEFAULT_EXCHANGE_FEE;
+}
+
+/** Manager-facing setter, in % (10 = 10 %). Returns the value stored. */
+export function setExchangeFee(percent) {
+    const clamped = Math.min(MAX_EXCHANGE_FEE, Math.max(0, Math.round(Number(percent) * 10) / 10));
+    setPath("market.json", "exchangeFee", Number.isFinite(clamped) ? clamped : DEFAULT_EXCHANGE_FEE);
+    setRatesUpdated();
+    return exchangeFee();
+}
+
+/**
+ * Exchange value: kamas are worth our sale price on each server, minus our fee.
+ * received = given × (price on source ÷ price on destination) × (1 − fee).
+ * Brial 0,38 € → Dakal 0,40 € at 10 %: 1000 M given = 855 M received.
+ * Null when a server has no price or both servers are the same.
+ */
+export function exchangeQuote(fromCode, toCode, given) {
+    if (!serverByCode(fromCode) || !serverByCode(toCode) || fromCode === toCode) return null;
+    if (typeof given !== "number" || !Number.isFinite(given) || given <= 0) return null;
+    const from = eurPrice(fromCode, "buy")?.eur;
+    const to = eurPrice(toCode, "buy")?.eur;
+    if (!positive(from) || !positive(to)) return null;
+
+    const fee = exchangeFee();
+    const ratio = (from / to) * (1 - fee / 100);
+    // Round down to 10 000 kamas: we never promise more than the rate gives.
+    const received = Math.floor(given * ratio * 100 + 1e-9) / 100;
+    return { from: fromCode, to: toCode, given, fee, fromPrice: from, toPrice: to, ratio, received };
 }
 
 export function formatMoney(amount, currency) {
@@ -433,6 +470,8 @@ export function edgeLine(serverCode, kind) {
  * Sell: best payout first.
  */
 export function serverRateLines(kind) {
+    // An exchange is valued at our sale price on each server: list those, with stock.
+    if (kind === "exchange") return exchangeValueLines();
     if (rateFor("EUR", kind) === null && !DOFUS_SERVERS.some((s) => effectiveRate("EUR", kind, s.code) !== null)) {
         return ["_Aucun prix configuré. Staff : `/rate tableau`._"];
     }
@@ -460,9 +499,20 @@ export function serverRateLines(kind) {
         const edge = edgeLine(code, kind);
         const tail = edge ? `\n${edge}` : "";
         if (!showStock) return `**${name}**\n└ ${summary}${tail}`;
-        const marker = stock.status === "open" ? "🟢" : stock.status === "low" ? "🟡" : "🔴";
-        const stockText = stock.status === "full" ? "complet" : formatMillions(stock.millions);
-        return `${marker} **${name}** · ${stockText}\n└ ${summary}${tail}`;
+        return `**${name}** · ${stockBadge(stock)}\n└ ${summary}${tail}`;
+    });
+}
+
+/**
+ * "🟢 **Draconiros** · 1 200 M" — the exchange displays show stock only, no
+ * prices: customers get their exact amount from the 🧮 simulator. In-stock first.
+ */
+function exchangeValueLines() {
+    const order = { open: 0, low: 1, full: 2 };
+    const rows = DOFUS_SERVERS.map((server) => ({ name: serverLabel(server), stock: stockFor(server.code) }));
+    rows.sort((a, b) => order[a.stock.status] - order[b.stock.status] || b.stock.millions - a.stock.millions || a.name.localeCompare(b.name));
+    return rows.map(({ name, stock }) => {
+        return `**${name}** · ${stockBadge(stock)}`;
     });
 }
 
@@ -482,8 +532,9 @@ export function serverRateFields(kind) {
     }
     if (current.length) chunks.push(current);
 
+    const title = kind === "exchange" ? "📦 Stock par serveur" : "🖥️ Prix par serveur";
     return chunks.map((lines, index) => ({
-        name: chunks.length > 1 ? `🖥️ Prix par serveur (${index + 1}/${chunks.length})` : "🖥️ Prix par serveur",
+        name: chunks.length > 1 ? `${title} (${index + 1}/${chunks.length})` : title,
         value: lines.join("\n"),
         inline: false,
     }));

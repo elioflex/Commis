@@ -1,11 +1,11 @@
 import { AttachmentBuilder, ChannelType, PermissionFlagsBits } from "discord.js";
 
 import { BRAND, SETTINGS, TICKET_STAGES, TICKET_TYPES, serverByCode } from "../config.js";
-import { infoEmbed, ticketClosedEmbed, ticketIntroEmbed } from "./embeds.js";
+import { infoEmbed, reviewRequestEmbed, ticketClosedEmbed, ticketIntroEmbed } from "./embeds.js";
 import { ensureCategory, logChannel, staffRole, transcriptChannel } from "./guild-utils.js";
 import { quote, effectiveRate } from "./market.js";
 import { read, update } from "./store.js";
-import { ticketActionRow } from "./components.js";
+import { reviewButtonRow, ticketActionRow } from "./components.js";
 import { buildTranscript } from "./transcript.js";
 
 const RATE_KIND_BY_TYPE = { achat: "buy", vente: "sell", echange: "exchange" };
@@ -13,6 +13,11 @@ const RATE_KIND_BY_TYPE = { achat: "buy", vente: "sell", echange: "exchange" };
 const ticketsFile = () => read("tickets.json");
 
 export const ticketByChannel = (channelId) => ticketsFile().open?.[channelId] ?? null;
+
+export const closedTicketById = (id) => (ticketsFile().closed ?? []).find((ticket) => ticket.id === id) ?? null;
+
+/** A review already left for this ticket, if any: one review per delivered ticket. */
+export const reviewForTicket = (id) => (read("reviews.json").entries ?? []).find((entry) => entry.ticketId === id) ?? null;
 
 export const openTicketsFor = (guildId, userId) =>
     Object.values(ticketsFile().open ?? {}).filter(
@@ -147,6 +152,10 @@ export async function openTicket({ guild, member, typeId, payload = {} }) {
         rate,
         total,
         serverCode: payload.serverCode ?? null,
+        transferFrom: payload.transferFrom ?? null,
+        transferTo: payload.transferTo ?? null,
+        received: payload.received ?? null,
+        exchangeFee: payload.exchangeFee ?? null,
         paymentCode: payload.paymentCode ?? null,
         personnage: payload.personnage ?? null,
         subject: payload.subject ?? null,
@@ -303,35 +312,33 @@ export async function closeTicket({ channel, ticket, closedBy, reasonCode, reaso
             .catch((error) => console.error("[ticket] transcript post failed:", error));
     }
 
-    // Point of contact after closing: ask for a review.
+    // Delivered: the customer gets a button to review this order (the only way to review).
     if (reasonCode === "livre") {
+        const request = { embeds: [reviewRequestEmbed(ticket, type)], components: [reviewButtonRow(ticket.id)] };
         const user = await client.users.fetch(ticket.userId).catch(() => null);
-        const reviewChannel = guild.channels.cache.find((c) => /avis|review/i.test(c.name));
-        if (user) {
-            await user
-                .send({
-                    embeds: [
-                        infoEmbed(
-                            `Merci pour ta commande chez **${BRAND.name}** !\nSi tout s'est bien passé, laisse un avis avec \`/avis\`${reviewChannel ? ` ou dans ${reviewChannel}` : ""}.`,
-                            "⭐ Ton avis compte",
-                        ),
-                    ],
-                })
+        const sent = user ? await user.send(request).catch(() => null) : null;
+        if (!sent) {
+            // DMs closed: an archived ticket keeps the customer's access, so the button can live there.
+            const kept = SETTINGS.closeAction === "archive";
+            if (kept) await channel.send({ content: `<@${ticket.userId}>`, ...request }).catch(() => {});
+            const where = kept ? `demande d'avis laissée dans le ticket #${ticket.number}` : "demande d'avis non reçue";
+            logChannel(guild)
+                ?.send({ embeds: [infoEmbed(`⭐ MP fermés pour <@${ticket.userId}> : ${where}.`)] })
                 .catch(() => {});
         }
     }
-
-    update("tickets.json", (data) => {
-        delete data.open[ticket.channelId];
-        data.closed = [ticket, ...(data.closed ?? [])].slice(0, 2000);
-        return ticket;
-    });
 
     ticket.status = "closed";
     ticket.closedAt = new Date().toISOString();
     ticket.closedBy = closedBy.id;
     ticket.closedByTag = closedBy.tag;
     ticket.reason = reasonCode ?? null;
+
+    update("tickets.json", (data) => {
+        delete data.open[ticket.channelId];
+        data.closed = [ticket, ...(data.closed ?? [])].slice(0, 2000);
+        return ticket;
+    });
 
     await channel
         .send({ embeds: [ticketClosedEmbed({ user: `<@${ticket.userId}>`, closedBy, reason })] })

@@ -25,13 +25,23 @@ export const closeReason = (code) => CLOSE_REASONS.find((r) => r.code === code) 
 
 export function panelRow(typeId) {
     const type = TICKET_TYPES[typeId];
-    return new ActionRowBuilder().addComponents(
+    const row = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
             .setCustomId(`panel:${typeId}`)
             .setLabel(type.label)
             .setEmoji(type.emoji)
             .setStyle(ButtonStyle.Success),
     );
+    if (typeId === "echange") {
+        row.addComponents(
+            new ButtonBuilder()
+                .setCustomId("xchg:sim")
+                .setLabel("Simuler mon échange")
+                .setEmoji("🧮")
+                .setStyle(ButtonStyle.Primary),
+        );
+    }
+    return row;
 }
 
 /* ───────────────────────── Ticket header ───────────────────────── */
@@ -163,6 +173,98 @@ export function continueRow(typeId, serverCode, paymentCode) {
 
 const textRow = (input) => new ActionRowBuilder().addComponents(input);
 
+/* ───────────────────────── Exchange flow ───────────────────────── */
+
+const serverOptions = (except) =>
+    DOFUS_SERVERS.filter((server) => server.code !== except)
+        .slice(0, 25)
+        .map((server) => ({ label: serverLabel(server), value: server.code }));
+
+/**
+ * Step 1: the server the customer gives kamas on. `mode` is "ticket" (open a
+ * ticket) or "sim" (just compute the amount received).
+ */
+export function exchangeSourceRow(mode = "ticket") {
+    return new ActionRowBuilder().addComponents(
+        new StringSelectMenuBuilder()
+            .setCustomId(`xchg:from:${mode}`)
+            .setPlaceholder("📤 Serveur source (tu donnes)")
+            .addOptions(serverOptions(null)),
+    );
+}
+
+/** Step 2: the server the customer receives kamas on. */
+export function exchangeDestinationRow(fromCode, mode = "ticket") {
+    return new ActionRowBuilder().addComponents(
+        new StringSelectMenuBuilder()
+            .setCustomId(`xchg:to:${mode}:${fromCode}`)
+            .setPlaceholder("📥 Serveur destination (tu reçois)")
+            .addOptions(serverOptions(fromCode)),
+    );
+}
+
+export function exchangeContinueRow(fromCode, toCode, given = null) {
+    return new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+            .setCustomId(`xchg:go:${fromCode}:${toCode}${given ? `:${given}` : ""}`)
+            .setLabel(given ? "Ouvrir un ticket avec ce montant" : "Remplir ma demande")
+            .setEmoji("📝")
+            .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+            .setCustomId(given ? "xchg:sim" : "xchg:restart")
+            .setLabel("Changer de serveurs")
+            .setEmoji("↩️")
+            .setStyle(ButtonStyle.Secondary),
+    );
+}
+
+const givenInput = (given) => {
+    const input = new TextInputBuilder()
+        .setCustomId("millions")
+        .setLabel("Quantité que tu donnes (en millions)")
+        .setPlaceholder("ex : 1000  (pour 1000 M de kamas)")
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true)
+        .setMaxLength(12);
+    return given ? input.setValue(String(given)) : input;
+};
+
+/** Simulator: only the quantity given, the answer comes back right away. */
+export function exchangeSimModal(fromCode, toCode) {
+    return new ModalBuilder()
+        .setCustomId(`modal:xchgsim:${fromCode}:${toCode}`)
+        .setTitle("🧮 Simuler mon échange")
+        .addComponents(textRow(givenInput(null)));
+}
+
+/** Step 3: how much the customer gives on the source server (prefilled after a simulation). */
+export function exchangeModal(fromCode, toCode, given = null) {
+    return new ModalBuilder()
+        .setCustomId(`modal:xchg:${fromCode}:${toCode}`)
+        .setTitle("♻️ Échange — ta demande")
+        .addComponents(
+            textRow(givenInput(given)),
+            textRow(
+                new TextInputBuilder()
+                    .setCustomId("personnage")
+                    .setLabel("Pseudo de ton perso sur le serveur destination")
+                    .setPlaceholder("ex : MyStique-Tylezia")
+                    .setStyle(TextInputStyle.Short)
+                    .setRequired(true)
+                    .setMaxLength(60),
+            ),
+            textRow(
+                new TextInputBuilder()
+                    .setCustomId("notes")
+                    .setLabel("Précisions (optionnel)")
+                    .setPlaceholder("ex : dispo maintenant, pseudo du perso qui donne")
+                    .setStyle(TextInputStyle.Paragraph)
+                    .setRequired(false)
+                    .setMaxLength(400),
+            ),
+        );
+}
+
 export function marketModal(typeId, serverCode, paymentCode) {
     const type = TICKET_TYPES[typeId];
     const modal = new ModalBuilder()
@@ -200,16 +302,8 @@ export function marketModal(typeId, serverCode, paymentCode) {
         textRow(
             new TextInputBuilder()
                 .setCustomId("notes")
-                .setLabel(
-                    typeId === "echange"
-                        ? "Serveur de départ + précisions"
-                        : "Précisions (optionnel)",
-                )
-                .setPlaceholder(
-                    typeId === "echange"
-                        ? "ex : départ Draconiros, arrivée sur mon serveur de destination"
-                        : "ex : dispo maintenant, livraison en plusieurs fois",
-                )
+                .setLabel("Précisions (optionnel)")
+                .setPlaceholder("ex : dispo maintenant, livraison en plusieurs fois")
                 .setStyle(TextInputStyle.Paragraph)
                 .setRequired(false)
                 .setMaxLength(400),
@@ -291,9 +385,21 @@ export function renameModal() {
         );
 }
 
-export function reviewModal() {
+/** Sent to the customer when their ticket is closed as delivered: the only way to leave a review. */
+export function reviewButtonRow(ticketId, { done = false } = {}) {
+    return new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+            .setCustomId(`review:open:${ticketId}`)
+            .setLabel(done ? "Avis envoyé, merci !" : "Laisser mon avis")
+            .setEmoji("⭐")
+            .setStyle(done ? ButtonStyle.Secondary : ButtonStyle.Success)
+            .setDisabled(done),
+    );
+}
+
+export function reviewModal(ticketId) {
     return new ModalBuilder()
-        .setCustomId("modal:review")
+        .setCustomId(`modal:review:${ticketId}`)
         .setTitle("Laisser un avis")
         .addComponents(
             textRow(

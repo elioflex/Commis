@@ -2,16 +2,20 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { DOFUS_SERVERS, TICKET_TYPE_IDS } from "../config.js";
-import { priceTableModal } from "../src/components.js";
-import { boardEmbed, guideEmbeds, panelEmbed, rateEmbed } from "../src/embeds.js";
+import { panelRow, priceTableModal } from "../src/components.js";
+import { boardEmbed, exchangeRecapEmbed, exchangeSimEmbed, guideEmbeds, panelEmbed, rateEmbed } from "../src/embeds.js";
 import {
+    DEFAULT_EXCHANGE_FEE,
     effectiveRate,
+    exchangeFee,
+    exchangeQuote,
     formatPriceTable,
     parsePriceTable,
     rateFor,
     serverPrice,
     serverPriceSummary,
     serverRateFields,
+    setExchangeFee,
     setServerPrice,
     stockLines,
     stockSummary,
@@ -105,12 +109,16 @@ test("market panels, the board and /rate voir stay inside Discord's embed limits
     assertEmbedFits(rateEmbed(), "rate voir");
 });
 
-test("buy list puts sold-out servers last, cheapest first among the rest", () => {
+test("buy list puts on-order servers last and never says « complet »", () => {
     const names = serverRateFields("buy")
         .flatMap((field) => field.value.split("\n"))
         .filter((line) => !line.startsWith("└"));
-    const firstFull = names.findIndex((line) => line.startsWith("🔴"));
-    if (firstFull !== -1) assert.ok(names.slice(firstFull).every((line) => line.startsWith("🔴")));
+    const firstOnOrder = names.findIndex((line) => line.includes("🕐 sur commande"));
+    if (firstOnOrder !== -1) assert.ok(names.slice(firstOnOrder).every((line) => line.includes("🕐 sur commande")));
+    for (const kind of ["buy", "exchange"]) {
+        const text = JSON.stringify(serverRateFields(kind)).toLowerCase();
+        assert.ok(!text.includes("complet") && !text.includes("🔴"), kind);
+    }
 });
 
 test("stock views skip servers we no longer sell", () => {
@@ -131,7 +139,83 @@ test("the bot guide fits in one message and lists every command", () => {
     assert.ok(embeds.reduce((sum, embed) => sum + embedLength(embed.toJSON()), 0) <= 6000);
 
     const text = JSON.stringify(embeds.map((embed) => embed.toJSON()));
-    const commands = ["/rate ajuster", "/rate prix", "/rate tableau", "/rate auto", "/stock set"];
-    commands.push("/ticket claim", "/ticket close", "/panel", "/setup", "/check", "/avis");
+    const commands = ["/rate ajuster", "/rate prix", "/rate tableau", "/rate auto", "/rate commission", "/stock set"];
+    commands.push("/ticket claim", "/ticket close", "/panel", "/setup", "/check");
+    assert.ok(!text.includes("/avis"), "reviews only come from the end-of-ticket button");
     for (const command of commands) assert.ok(text.includes(command), `guide mentions ${command}`);
+});
+
+/** Pins sale prices on two servers for the duration of `fn`, then restores them. */
+function withExchangePrices(prices, fn) {
+    const saved = structuredClone(read("market.json"));
+    try {
+        for (const [code, price] of Object.entries(prices)) setServerPrice(code, "buy", price);
+        return fn();
+    } finally {
+        setPath("market.json", "serverPrices", saved.serverPrices ?? {});
+        setPath("market.json", "exchangeFee", saved.exchangeFee ?? DEFAULT_EXCHANGE_FEE);
+    }
+}
+
+test("exchange: value ratio between servers, minus the commission", () => {
+    const [from, to] = DOFUS_SERVERS.map((server) => server.code);
+    withExchangePrices({ [from]: 0.38, [to]: 0.4 }, () => {
+        setExchangeFee(10);
+        // 1000 × 0,38 / 0,40 × 0,9 = 855
+        assert.equal(exchangeQuote(from, to, 1000).received, 855);
+        // Other way round: 1000 × 0,40 / 0,38 × 0,9 = 947,36… rounded down.
+        assert.equal(exchangeQuote(to, from, 1000).received, 947.36);
+
+        setServerPrice(to, "buy", 0.38);
+        assert.equal(exchangeQuote(from, to, 1000).received, 900);
+
+        setExchangeFee(0);
+        assert.equal(exchangeQuote(from, to, 1000).received, 1000);
+    });
+});
+
+test("exchange: invalid input gives no quote, commission is clamped", () => {
+    const [from, to] = DOFUS_SERVERS.map((server) => server.code);
+    withExchangePrices({ [from]: 0.38, [to]: 0.4 }, () => {
+        assert.equal(exchangeQuote(from, from, 1000), null);
+        assert.equal(exchangeQuote(from, to, 0), null);
+        assert.equal(exchangeQuote(from, "inconnu", 1000), null);
+
+        assert.equal(setExchangeFee(80), 50);
+        assert.equal(setExchangeFee(-5), 0);
+        assert.equal(setExchangeFee(12.5), 12.5);
+        assert.equal(exchangeFee(), 12.5);
+    });
+});
+
+test("exchange recap shows both servers, the rate and an example", () => {
+    const [from, to] = DOFUS_SERVERS;
+    withExchangePrices({ [from.code]: 0.38, [to.code]: 0.4 }, () => {
+        setExchangeFee(10);
+        const embed = exchangeRecapEmbed(from.code, to.code);
+        assertEmbedFits(embed, "exchange recap");
+        const text = embed.toJSON().description;
+        assert.ok(text.includes(from.name) && text.includes(to.name));
+        assert.ok(text.includes("0,855"), text);
+        assert.ok(text.includes("855 M"), text);
+        assert.ok(text.includes("commission 10 %"), text);
+    });
+});
+
+test("exchange displays show stock only, the simulator gives the amount", () => {
+    for (const embed of [boardEmbed("exchange"), panelEmbed("echange")]) {
+        const text = JSON.stringify(embed.toJSON().fields);
+        assert.ok(!text.includes("€") && !text.includes("DH"), "no price on the exchange displays");
+    }
+    const ids = panelRow("echange").toJSON().components.map((button) => button.custom_id);
+    assert.deepEqual(ids, ["panel:echange", "xchg:sim"]);
+    assert.equal(panelRow("achat").toJSON().components.length, 1);
+
+    const [from, to] = DOFUS_SERVERS;
+    withExchangePrices({ [from.code]: 0.38, [to.code]: 0.4 }, () => {
+        setExchangeFee(10);
+        const text = exchangeSimEmbed(from.code, to.code, 1000).toJSON().description;
+        assert.ok(text.includes("855 M") && text.includes(to.name), text);
+        assert.ok(!exchangeRecapEmbed(from.code, to.code).toJSON().description.includes("€"));
+    });
 });

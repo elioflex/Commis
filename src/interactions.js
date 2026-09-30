@@ -1,4 +1,4 @@
-import { AttachmentBuilder } from "discord.js";
+import { AttachmentBuilder, MessageFlags } from "discord.js";
 
 import { CURRENCY_CODES, TICKET_TYPES, paymentByCode, serverByCode, serverLabel } from "../config.js";
 import {
@@ -6,26 +6,35 @@ import {
     closeReasonRow,
     confirmRow,
     continueRow,
+    exchangeContinueRow,
+    exchangeDestinationRow,
+    exchangeModal,
+    exchangeSimModal,
+    exchangeSourceRow,
     marketModal,
     memberModeRow,
     memberSelectRow,
     moveStageRow,
     paymentSelectRow,
     renameModal,
+    reviewButtonRow,
+    reviewModal,
     serverSelectRow,
     simpleModal,
 } from "./components.js";
-import { baseEmbed, errorEmbed, infoEmbed, successEmbed } from "./embeds.js";
+import { baseEmbed, errorEmbed, exchangeRecapEmbed, exchangeSimEmbed, infoEmbed, onOrderLine, reviewEmbed, successEmbed } from "./embeds.js";
 import { isManager, isStaff } from "./guild-utils.js";
 import { refreshMarketDisplays } from "./live-board.js";
 import {
     parseMillions,
     effectiveRate,
+    exchangeQuote,
     formatMoney,
     formatMillions,
     parsePriceTable,
     quote,
     serverPriceSummary,
+    stockFor,
     setServerPrice,
 } from "./market.js";
 
@@ -34,9 +43,11 @@ import { buildTranscript } from "./transcript.js";
 import {
     claimTicket,
     closeTicket,
+    closedTicketById,
     grantAccess,
     openTicket,
     renameTicket,
+    reviewForTicket,
     revokeAccess,
     setTicketStage,
     ticketByChannel,
@@ -98,7 +109,15 @@ async function handleButton(client, interaction) {
 
     if (scope === "panel") return handlePanelButton(interaction, rest[0]);
     if (scope === "flow" && rest[0] === "go") return handleFlowGo(interaction, rest[1], rest[2], rest[3]);
+    if (scope === "xchg" && rest[0] === "go") return interaction.showModal(exchangeModal(rest[1], rest[2], rest[3]));
+    if (scope === "xchg" && rest[0] === "restart") return interaction.update(exchangeStart());
+    if (scope === "xchg" && rest[0] === "sim") {
+        // From the public panel: new ephemeral reply. From a simulation result: start over in place.
+        const fromPanel = !interaction.message?.flags?.has(MessageFlags.Ephemeral);
+        return fromPanel ? respond(interaction, exchangeStart("sim")) : interaction.update(exchangeStart("sim"));
+    }
     if (scope === "ticket") return handleTicketButton(client, interaction, rest);
+    if (scope === "review" && rest[0] === "open") return openReview(interaction, rest[1]);
     return undefined;
 }
 
@@ -112,6 +131,8 @@ async function handlePanelButton(interaction, typeId) {
         return interaction.showModal(simpleModal(typeId));
     }
 
+    if (typeId === "echange") return respond(interaction, exchangeStart());
+
     return respond(interaction, {
         embeds: [
             infoEmbed(
@@ -121,6 +142,16 @@ async function handlePanelButton(interaction, typeId) {
         ],
         components: [serverSelectRow(typeId)],
     });
+}
+
+/** Exchange step 1: pick the server the customer gives kamas on. */
+function exchangeStart(mode = "ticket") {
+    const type = TICKET_TYPES.echange;
+    const intro = mode === "sim" ? "🧮 **Simulation d'échange**, sans engagement." : `${type.emoji} **${type.label}**\n\n${type.blurb}`;
+    return {
+        embeds: [infoEmbed(`${intro}\n\n**1.** Sur quel serveur tu **donnes** tes kamas ? 👇`, "📤 Serveur source")],
+        components: [exchangeSourceRow(mode)],
+    };
 }
 
 async function handleFlowGo(interaction, typeId, serverCode, paymentCode) {
@@ -302,6 +333,31 @@ async function handleSelect(interaction) {
         });
     }
 
+    if (scope === "xchg" && rest[0] === "from") {
+        const mode = rest[1] === "sim" ? "sim" : "ticket";
+        const fromCode = interaction.values[0];
+        const name = serverLabel(serverByCode(fromCode)) || fromCode;
+        return interaction.update({
+            embeds: [
+                infoEmbed(
+                    `📤 Tu donnes sur : **${name}**\n\n**2.** Sur quel serveur tu veux **recevoir** tes kamas ? 👇`,
+                    "📥 Serveur destination",
+                ),
+            ],
+            components: [exchangeDestinationRow(fromCode, mode)],
+        });
+    }
+
+    if (scope === "xchg" && rest[0] === "to") {
+        const [, mode, fromCode] = rest;
+        const toCode = interaction.values[0];
+        if (mode === "sim") return interaction.showModal(exchangeSimModal(fromCode, toCode));
+        return interaction.update({
+            embeds: [exchangeRecapEmbed(fromCode, toCode)],
+            components: [exchangeContinueRow(fromCode, toCode)],
+        });
+    }
+
     if (scope === "flow" && rest[0] === "pay") {
         const typeId = rest[1];
         const serverCode = rest[2];
@@ -395,6 +451,22 @@ async function handleModal(client, interaction) {
         return createTicketFromModal(interaction, typeId, serverCode, paymentCode);
     }
 
+    if (scope === "modal" && rest[0] === "xchgsim") {
+        const [, fromCode, toCode] = rest;
+        const given = parseMillions(interaction.fields.getTextInputValue("millions"));
+        if (given === null || !serverByCode(fromCode) || !serverByCode(toCode)) {
+            return respond(interaction, {
+                embeds: [errorEmbed("Quantité invalide. Utilise un nombre de millions, ex : `1000` ou `12.5` (ou `1200k`).")],
+            });
+        }
+        const result = { embeds: [exchangeSimEmbed(fromCode, toCode, given)], components: [exchangeContinueRow(fromCode, toCode, given)] };
+        return interaction.isFromMessage() ? interaction.update(result) : respond(interaction, result);
+    }
+
+    if (scope === "modal" && rest[0] === "xchg") {
+        return createExchangeTicket(interaction, rest[1], rest[2]);
+    }
+
     if (scope === "modal" && rest[0] === "simple") {
         const typeId = rest[1];
         return createTicketFromModal(interaction, typeId, null, null);
@@ -449,45 +521,7 @@ async function handleModal(client, interaction) {
         });
     }
 
-    if (scope === "modal" && rest[0] === "review") {
-        const ratingRaw = Number.parseInt(interaction.fields.getTextInputValue("rating"), 10);
-        const text = interaction.fields.getTextInputValue("text").trim();
-        const rating = Math.min(5, Math.max(1, Number.isFinite(ratingRaw) ? ratingRaw : 5));
-
-        await interaction.deferReply({ ephemeral: true });
-
-        const { reviewEmbed } = await import("./embeds.js");
-        const channel =
-            interaction.guild.channels.cache.find((c) => /avis|review/i.test(c.name)) ?? interaction.channel;
-
-        const entry = {
-            userId: interaction.user.id,
-            userTag: interaction.user.tag,
-            rating,
-            text,
-            at: new Date().toISOString(),
-        };
-
-        await channel.send({
-            embeds: [
-                reviewEmbed({
-                    author: { tag: interaction.user.tag, displayAvatarURL: () => interaction.user.displayAvatarURL() },
-                    rating,
-                    text,
-                    kindLabelText: "Commande vérifiée",
-                }),
-            ],
-        });
-
-        update("reviews.json", (data) => {
-            data.entries = [entry, ...(data.entries ?? [])].slice(0, 5000);
-            return entry;
-        });
-
-        return interaction.editReply({
-            embeds: [successEmbed("Merci pour ton avis ! 💛", "⭐ Avis publié")],
-        });
-    }
+    if (scope === "modal" && rest[0] === "review") return submitReview(client, interaction, rest[1]);
 
     return undefined;
 }
@@ -568,4 +602,122 @@ async function createTicketFromModal(interaction, typeId, serverCode, paymentCod
             successEmbed(`${type.emoji} Ton ticket est ouvert : ${channel}${summary}`, `✅ Ticket #${ticket.number}`),
         ],
     });
+}
+
+async function createExchangeTicket(interaction, fromCode, toCode) {
+    if (!serverByCode(fromCode) || !serverByCode(toCode) || fromCode === toCode) {
+        return respond(interaction, { embeds: [errorEmbed("Serveurs invalides. Recommence depuis le panneau d'échange.")] });
+    }
+
+    const given = parseMillions(interaction.fields.getTextInputValue("millions"));
+    if (given === null) {
+        return respond(interaction, {
+            embeds: [errorEmbed("Quantité invalide. Utilise un nombre de millions, ex : `1000` ou `12.5` (ou `1200k`).")],
+        });
+    }
+
+    const exchange = exchangeQuote(fromCode, toCode, given);
+    const payload = {
+        serverCode: toCode,
+        transferFrom: fromCode,
+        transferTo: toCode,
+        millions: given,
+        received: exchange?.received ?? null,
+        exchangeFee: exchange?.fee ?? null,
+        personnage: interaction.fields.getTextInputValue("personnage").trim(),
+    };
+    const notes = interaction.fields.getTextInputValue("notes").trim();
+    if (notes) payload.notes = notes;
+
+    await interaction.deferReply({ ephemeral: true });
+    const result = await openTicket({ guild: interaction.guild, member: interaction.member, typeId: "echange", payload });
+
+    if (result.duplicate) {
+        return interaction.editReply({
+            embeds: [
+                infoEmbed(
+                    `Tu as déjà un ticket ouvert : <#${result.duplicate.channelId}>\nFerme-le avant d'en ouvrir un nouveau.`,
+                    "⚠️ Ticket existant",
+                ),
+            ],
+        });
+    }
+
+    const { ticket, channel } = result;
+    const name = (code) => serverLabel(serverByCode(code)) || code;
+    const stock = stockFor(toCode);
+    const lines = [
+        `♻️ Ton ticket est ouvert : ${channel}`,
+        `📤 Tu donnes **${formatMillions(given)}** sur ${name(fromCode)}`,
+        exchange
+            ? `📥 Tu reçois **${formatMillions(exchange.received)}** sur ${name(toCode)} (commission ${exchange.fee.toLocaleString("fr-FR")} % incluse)`
+            : `📥 Quantité reçue sur ${name(toCode)} : à confirmer avec le staff`,
+    ];
+    if (exchange && (stock.status === "full" || exchange.received > stock.millions)) lines.push("", onOrderLine(name(toCode)));
+
+    return interaction.editReply({ embeds: [successEmbed(lines.join("\n"), `✅ Ticket #${ticket.number}`)] });
+}
+
+/* ───────────────────────── reviews ───────────────────────── */
+
+/** Only the customer of a delivered ticket may review it, once. Returns an error text or the ticket. */
+function reviewableTicket(interaction, ticketId) {
+    const ticket = ticketId ? closedTicketById(ticketId) : null;
+    if (!ticket || ticket.userId !== interaction.user.id) return { error: "Cet avis n'est pas lié à une de tes commandes." };
+    if (reviewForTicket(ticket.id)) return { error: "Tu as déjà laissé un avis pour cette commande. Merci ! 💛" };
+    return { ticket };
+}
+
+async function openReview(interaction, ticketId) {
+    const { ticket, error } = reviewableTicket(interaction, ticketId);
+    if (!ticket) return respond(interaction, { embeds: [errorEmbed(error, "⭐ Avis")] });
+    return interaction.showModal(reviewModal(ticket.id));
+}
+
+async function submitReview(client, interaction, ticketId) {
+    const { ticket, error } = reviewableTicket(interaction, ticketId);
+    if (!ticket) return respond(interaction, { embeds: [errorEmbed(error, "⭐ Avis")] });
+
+    const ratingRaw = Number.parseInt(interaction.fields.getTextInputValue("rating"), 10);
+    const text = interaction.fields.getTextInputValue("text").trim();
+    const rating = Math.min(5, Math.max(1, Number.isFinite(ratingRaw) ? ratingRaw : 5));
+
+    // The button usually sits in a DM: find the shop's server from the ticket.
+    const guild = client.guilds.cache.get(ticket.guildId);
+    const channel = guild?.channels.cache.find((c) => c.isTextBased() && /avis|review/i.test(c.name));
+    if (!channel) {
+        return respond(interaction, { embeds: [errorEmbed("Le salon des avis est introuvable, préviens le staff.", "⭐ Avis")] });
+    }
+
+    await channel.send({
+        embeds: [
+            reviewEmbed({
+                author: { tag: interaction.user.tag, displayAvatarURL: () => interaction.user.displayAvatarURL() },
+                rating,
+                text,
+                ticket,
+            }),
+        ],
+    });
+
+    const entry = {
+        ticketId: ticket.id,
+        userId: interaction.user.id,
+        userTag: interaction.user.tag,
+        type: ticket.type,
+        rating,
+        text,
+        at: new Date().toISOString(),
+    };
+    update("reviews.json", (data) => {
+        data.entries = [entry, ...(data.entries ?? [])].slice(0, 5000);
+        return entry;
+    });
+
+    const thanks = { embeds: [successEmbed(`Merci pour ton avis ! 💛 Il est publié dans ${channel}.`, "⭐ Avis publié")] };
+    // Grey out the button so it can't be pressed again.
+    if (interaction.isFromMessage()) {
+        return interaction.update({ ...thanks, components: [reviewButtonRow(ticket.id, { done: true })] });
+    }
+    return respond(interaction, thanks);
 }

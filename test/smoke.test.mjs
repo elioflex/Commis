@@ -19,19 +19,9 @@ import { setupGuild } from "../src/setup.js";
 import { ticketStats } from "../src/tickets.js";
 import { buildTranscript } from "../src/transcript.js";
 
-test("market math: quote applies the exchange rebate for big lots", () => {
-    assert.deepEqual(quote("buy", 50, 1.35), {
-        kind: "buy",
-        millions: 50,
-        rate: 1.35,
-        discount: 0,
-        total: 67.5,
-    });
-
-    const bigExchange = quote("echange", 200, 1);
-    assert.equal(bigExchange.discount, 0.1);
-    assert.equal(bigExchange.total, 180);
-
+test("market math: quote is quantity × rate", () => {
+    assert.deepEqual(quote("buy", 50, 1.35), { kind: "buy", millions: 50, rate: 1.35, total: 67.5 });
+    assert.equal(quote("exchange", 200, 1).total, 200);
     assert.equal(quote("buy", 50, null), null);
     assert.equal(quote("buy", 0, 1), null);
 });
@@ -85,7 +75,7 @@ test("formatMoney never renders NaN", () => {
 
 test("every slash command is valid and under Discord's option limits", () => {
     const names = commandData.map((command) => command.name);
-    assert.deepEqual(names, ["panel", "ticket", "rate", "stock", "avis", "setup", "check", "help"]);
+    assert.deepEqual(names, ["panel", "ticket", "rate", "stock", "setup", "check", "help"]);
 
     for (const command of commandData) {
         assert.ok(command.description.length <= 100, `${command.name} description too long`);
@@ -180,4 +170,54 @@ test("ticket stats tolerate an empty store", () => {
     const stats = ticketStats("does-not-exist");
     assert.equal(stats.openCount, 0);
     assert.equal(stats.closedCount, 0);
+});
+
+test("reviews: one per delivered ticket, through the end-of-ticket button", async () => {
+    const { reviewButtonRow, reviewModal } = await import("../src/components.js");
+    const { closedTicketById, reviewForTicket } = await import("../src/tickets.js");
+    const { read, write } = await import("../src/store.js");
+
+    const button = reviewButtonRow("achat-00007").toJSON().components[0];
+    assert.equal(button.custom_id, "review:open:achat-00007");
+    assert.equal(reviewButtonRow("achat-00007", { done: true }).toJSON().components[0].disabled, true);
+    assert.equal(reviewModal("achat-00007").toJSON().custom_id, "modal:review:achat-00007");
+
+    const savedTickets = read("tickets.json");
+    const savedReviews = read("reviews.json");
+    try {
+        write("tickets.json", { ...savedTickets, closed: [{ id: "achat-00007", userId: "42", type: "achat" }] });
+        write("reviews.json", { entries: [] });
+        assert.equal(closedTicketById("achat-00007").userId, "42");
+        assert.equal(closedTicketById("inconnu"), null);
+        assert.equal(reviewForTicket("achat-00007"), null);
+
+        write("reviews.json", { entries: [{ ticketId: "achat-00007", rating: 5 }] });
+        assert.equal(reviewForTicket("achat-00007").rating, 5);
+    } finally {
+        write("tickets.json", savedTickets);
+        write("reviews.json", savedReviews);
+    }
+});
+
+test("review shows the order details and the real time, only when 30 min or less", async () => {
+    const { reviewEmbed } = await import("../src/embeds.js");
+    const author = { tag: "client#0001", displayAvatarURL: () => undefined };
+    const opened = "2026-09-30T10:00:00.000Z";
+    const [from, to] = DOFUS_SERVERS;
+    const fieldsFor = (ticket) =>
+        Object.fromEntries(reviewEmbed({ author, rating: 5, text: "top", ticket }).toJSON().fields.map((f) => [f.name, f.value]));
+
+    const fast = fieldsFor({ type: "achat", millions: 250, serverCode: from.code, openedAt: opened, closedAt: "2026-09-30T10:12:00.000Z" });
+    assert.equal(fast["⏱️ Durée"], "Livré en 12 min");
+    assert.ok(fast["💰 Quantité"].includes("250") && fast["💰 Quantité"].includes(from.name));
+
+    const slow = fieldsFor({ type: "achat", millions: 250, serverCode: from.code, openedAt: opened, closedAt: "2026-09-30T11:30:00.000Z" });
+    assert.equal(slow["⏱️ Durée"], undefined);
+
+    const swap = fieldsFor({
+        type: "echange", millions: 1000, received: 855, transferFrom: from.code, transferTo: to.code,
+        openedAt: opened, closedAt: "2026-09-30T10:30:00.000Z",
+    });
+    assert.ok(swap["♻️ Transfert"].includes("855") && swap["♻️ Transfert"].includes(to.name));
+    assert.equal(swap["⏱️ Durée"], "Livré en 30 min");
 });

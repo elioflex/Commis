@@ -17,13 +17,18 @@ import {
     competitorPrices,
     effectiveRate,
     eurPrice,
+    exchangeFee,
+    exchangeQuote,
     feedEnabled,
     feedFactors,
     feedState,
     formatMillions,
     formatMoney,
     market,
+    stockBadge,
+    stockFor,
     MAX_ADJUST,
+    MAX_EXCHANGE_FEE,
     MIN_MARGIN,
     rateFor,
     rateLines,
@@ -93,6 +98,7 @@ export function panelEmbed(typeId) {
             [
                 type.blurb,
                 isMarketType(typeId) ? comparisonLine(kindForType(typeId)) : null,
+                typeId === "echange" ? exchangeRuleLine() : null,
                 "",
                 `Clique sur le bouton ci-dessous 👇`,
                 isMarketType(typeId) ? pricesUpdatedLine() : null,
@@ -116,13 +122,77 @@ export function panelEmbed(typeId) {
         });
     }
 
-    embed.addFields({
-        name: "💳 Moyens de paiement acceptés",
-        value: PAYMENT_METHODS.map((m) => `${m.emoji} ${m.label}`).join(" • "),
-        inline: false,
-    });
+    if (typeId !== "echange") {
+        embed.addFields({
+            name: "💳 Moyens de paiement acceptés",
+            value: PAYMENT_METHODS.map((m) => `${m.emoji} ${m.label}`).join(" • "),
+            inline: false,
+        });
+    }
 
     return embed;
+}
+
+/** How an exchange is computed, in one line for the panel and the live board. */
+function exchangeRuleLine() {
+    const fee = exchangeFee().toLocaleString("fr-FR");
+    return (
+        "💱 Tu choisis le serveur où tu donnes, celui où tu reçois, puis la quantité : " +
+        `on convertit selon la valeur des kamas sur chaque serveur, **commission ${fee} %** incluse.\n` +
+        "🧮 **Simuler mon échange** (salon ♻️・échanger-kamas) donne le montant exact reçu."
+    );
+}
+
+const formatRatio = (value) => value.toLocaleString("fr-FR", { maximumFractionDigits: 3 });
+
+/** Shown when we lack stock: the order still goes ahead, delivery follows. */
+export const onOrderLine = (serverName) =>
+    `🕐 **Sur commande sur ${serverName}** : ouvre ton ticket quand même, on lance la procédure et on livre dès que le stock est prêt.`;
+
+/** 🧮 simulator answer: what `given` M on the source turns into on the destination. */
+export function exchangeSimEmbed(fromCode, toCode, given) {
+    const name = (code) => serverLabel(serverByCode(code)) || code;
+    const result = exchangeQuote(fromCode, toCode, given);
+    const stock = stockFor(toCode);
+    const lines = [`📤 Tu donnes : **${formatMillions(given)}** sur ${name(fromCode)}`];
+    if (result) {
+        lines.push(
+            `📥 Tu reçois : **${formatMillions(result.received)}** sur ${name(toCode)}`,
+            `_Commission ${result.fee.toLocaleString("fr-FR")} % incluse._`,
+        );
+        if (stock.status === "full" || result.received > stock.millions) lines.push("", onOrderLine(name(toCode)));
+    } else {
+        lines.push(`📥 Sur ${name(toCode)} : **à confirmer avec le staff**.`);
+    }
+    lines.push("", "Simulation indicative, sans engagement. Ça te va ? Ouvre ton ticket 👇");
+    return baseEmbed({ color: TICKET_TYPES.echange.color }).setTitle("🧮 Simulation d'échange").setDescription(lines.join("\n"));
+}
+
+/** Ephemeral recap once the customer picked both servers of an exchange. */
+export function exchangeRecapEmbed(fromCode, toCode) {
+    const type = TICKET_TYPES.echange;
+    const name = (code) => serverLabel(serverByCode(code)) || code;
+    const example = exchangeQuote(fromCode, toCode, 1000);
+    const stock = stockFor(toCode);
+    const stockText = stockBadge(stock);
+
+    const lines = [
+        `📤 **Tu donnes sur :** ${name(fromCode)}`,
+        `📥 **Tu reçois sur :** ${name(toCode)}`,
+        `📦 **Notre stock sur ${name(toCode)} :** ${stockText}`,
+        "",
+    ];
+    if (example) {
+        lines.push(
+            `💱 **Taux : 1 M donné = ${formatRatio(example.ratio)} M reçu** (commission ${example.fee.toLocaleString("fr-FR")} % incluse)`,
+            `Exemple : **${formatMillions(1000)}** donnés → **${formatMillions(example.received)}** reçus`,
+        );
+    } else {
+        lines.push("💱 Taux : **à confirmer avec le staff** (prix manquant sur un des serveurs).");
+    }
+    lines.push("", "Clique sur le bouton et indique combien tu donnes 👇");
+
+    return baseEmbed({ color: type.color }).setTitle(`${type.emoji}  Récapitulatif de l'échange`).setDescription(lines.join("\n"));
 }
 
 export function rateEmbed() {
@@ -143,7 +213,7 @@ export function rateEmbed() {
 const BOARD_TITLES = {
     buy: "🛒 Achat de kamas — prix par serveur",
     sell: "💸 Vente de kamas — ce qu'on te paie",
-    exchange: "♻️ Échange inter-serveurs — prix par serveur",
+    exchange: "♻️ Échange inter-serveurs — stock par serveur",
 };
 
 /** One of the three live embeds kept up to date in 📈・taux-du-jour. */
@@ -151,7 +221,7 @@ export function boardEmbed(kind) {
     const lines = [
         comparisonLine(kind),
         pricesUpdatedLine(),
-        kind === "exchange" ? "_-10 % automatique à partir de 100 M._" : null,
+        kind === "exchange" ? exchangeRuleLine() : null,
     ].filter(
         (line) => line !== null,
     );
@@ -248,7 +318,7 @@ export function stockEmbed() {
         .setDescription(stockLines().join("\n"));
     embed.addFields({
         name: "📊 Résumé",
-        value: `🟢 ${summary.open} • 🟡 ${summary.low} • 🔴 ${summary.full} — total **${formatMillions(summary.totalMillions)}**`,
+        value: `🟢 ${summary.open} • 🟡 ${summary.low} • 🕐 ${summary.full} — total **${formatMillions(summary.totalMillions)}**`,
         inline: false,
     });
     return embed;
@@ -276,7 +346,7 @@ export function guideEmbeds() {
                 "• **💸・vendre-kamas** — le client **nous vend** : on affiche **ce qu'on paie**.",
                 "• **♻️・échanger-kamas** — échange de kamas entre serveurs.",
                 "• **📈・taux-du-jour** — tous les prix et stocks, mis à jour en direct.",
-                "• **⭐・avis-clients** — les avis laissés avec `/avis`.",
+                "• **⭐・avis-clients** — avis vérifiés : un bouton est envoyé au client quand son ticket est fermé « ✅ Commande livrée ».",
                 "Prix affichés en **euros** et en **dirhams** uniquement, par million (M) de kamas.",
                 "",
                 "**🧭 Parcours du client**",
@@ -315,6 +385,10 @@ export function guideEmbeds() {
                 "2. 🌐 **Prix web** (relevé automatique), avec l'ajustement 🎚️ du manager (`/rate ajuster`).",
                 "3. **Taux de base** × multiplicateur du serveur, si aucun prix web n'existe.",
                 "",
+                "**♻️ Échange inter-serveurs**",
+                "Le client choisit le serveur où il donne, celui où il reçoit, puis la quantité donnée.",
+                `Reçu = donné × (prix de vente source ÷ prix de vente destination) × (1 − **${exchangeFee().toLocaleString("fr-FR")} %** de commission).`,
+                "",
                 "**🏆 Comparaison affichée aux clients**",
                 "Sous chaque serveur, on montre seulement les concurrents qu'on bat réellement " +
                     "(« -5 % vs KamasV »). Si le dernier relevé a plus de 6 h, la comparaison disparaît.",
@@ -337,7 +411,8 @@ export function guideEmbeds() {
                     "👑 `/rate prix <serveur> <sens> <prix>` — fixer un prix exact en €/M. `0` = revenir au prix web.",
                     "👑 `/rate tableau` — modifier les prix de tous les serveurs d'un coup.",
                     "👑 `/rate auto actif:<oui|non>` — activer ou mettre en pause les prix web.",
-                    "👑 `/rate auto achat|vente|echange:<%>` — changer les facteurs vs concurrents (100 = pareil).",
+                    "👑 `/rate auto achat|vente:<%>` — changer les facteurs vs concurrents (100 = pareil).",
+                    `👑 \`/rate commission <%>\` — commission sur les échanges (0 à ${MAX_EXCHANGE_FEE} %).`,
                     "👑 `/rate auto actualiser:oui` — relever les prix tout de suite (~30 s).",
                     "👑 `/rate set <devise> <sens> <prix>` — taux de base (utilisé sans prix web).",
                     "👑 `/rate serveur <serveur> <multiplicateur>` — multiplicateur du taux de base (1,1 = +10 %).",
@@ -347,7 +422,7 @@ export function guideEmbeds() {
                 name: "📦 Stock — `/stock`",
                 value: [
                     "👤 `/stock voir` — stock par serveur.",
-                    "🧑‍💼 `/stock set <serveur> <millions> <dispo|limite|complet>` — mettre à jour (🟢 🟡 🔴 sur le panneau d'achat).",
+                    "🧑‍💼 `/stock set <serveur> <millions> <dispo|limite|sur commande>` — mettre à jour (🟢 🟡 🕐 sur les panneaux ; 🕐 = sur commande, le client peut toujours commander).",
                 ].join("\n"),
             },
             {
@@ -368,7 +443,6 @@ export function guideEmbeds() {
                     "🧑‍💼 `/panel <type>` — poster un panneau (achat, vente, échange, support, remboursement) dans ce salon.",
                     "🧑‍💼 `/setup [seulement_salons]` — créer les rôles, catégories et salons manquants.",
                     "🧑‍💼 `/check` — diagnostic : permissions, rôles, salons manquants.",
-                    "👤 `/avis` — laisser un avis (publié dans ⭐・avis-clients).",
                     "👤 `/help` — aide rapide.",
                 ].join("\n"),
             },
@@ -394,10 +468,28 @@ export function ticketIntroEmbed(ticket, user, type) {
         );
 
     const fields = [];
-    if (ticket.serverCode) {
+    if (ticket.transferFrom && ticket.transferTo) {
+        const name = (code) => serverLabel(serverByCode(code)) || code;
+        fields.push(
+            { name: "📤 Tu donnes", value: `**${formatMillions(ticket.millions)}** sur ${name(ticket.transferFrom)}`, inline: true },
+            {
+                name: "📥 Tu reçois",
+                value:
+                    ticket.received == null
+                        ? `À confirmer sur ${name(ticket.transferTo)}`
+                        : `**${formatMillions(ticket.received)}** sur ${name(ticket.transferTo)}`,
+                inline: true,
+            },
+        );
+        if (ticket.exchangeFee != null) {
+            fields.push({ name: "💱 Commission", value: `${ticket.exchangeFee.toLocaleString("fr-FR")} % (incluse)`, inline: true });
+        }
+    } else if (ticket.serverCode) {
         fields.push({ name: "🌍 Serveur Dofus", value: serverLabel(serverByCode(ticket.serverCode)) || ticket.serverCode, inline: true });
     }
-    if (ticket.millions) fields.push({ name: "💰 Quantité", value: formatMillions(ticket.millions), inline: true });
+    if (ticket.millions && !ticket.transferFrom) {
+        fields.push({ name: "💰 Quantité", value: formatMillions(ticket.millions), inline: true });
+    }
     if (ticket.currency) {
         const rate = effectiveRate(ticket.currency, ticket.rateKind, ticket.serverCode);
         const total = ticket.total;
@@ -421,13 +513,6 @@ export function ticketIntroEmbed(ticket, user, type) {
     if (ticket.personnage) fields.push({ name: "🧙 Personnage", value: ticket.personnage, inline: true });
     if (ticket.subject) fields.push({ name: "📌 Sujet", value: ticket.subject, inline: false });
     if (ticket.notes) fields.push({ name: "📝 Notes", value: ticket.notes, inline: false });
-    if (ticket.transferFrom && ticket.transferTo) {
-        fields.push({
-            name: "♻️ Transfert",
-            value: `${serverLabel(serverByCode(ticket.transferFrom)) || ticket.transferFrom} → ${serverLabel(serverByCode(ticket.transferTo)) || ticket.transferTo}`,
-            inline: false,
-        });
-    }
 
     if (fields.length) embed.addFields(fields);
     embed.addFields({ name: "🧾 Ticket", value: `\`${ticket.id}\` • ouvert <t:${timestamp()}:R>`, inline: false });
@@ -449,13 +534,59 @@ export function ticketClosedEmbed({ user, closedBy, reason }) {
         );
 }
 
-export function reviewEmbed({ author, rating, text, kindLabelText }) {
+/** Sent to the customer once their order is delivered, with the review button. */
+export function reviewRequestEmbed(ticket, type) {
+    return baseEmbed({ color: BRAND.colors.brand })
+        .setTitle("⭐ Ton avis compte")
+        .setDescription(
+            [
+                `Merci pour ta commande chez **${BRAND.name}** ! ${type.emoji} ${type.label} • ticket #${ticket.number}`,
+                "",
+                "Clique sur le bouton pour noter la transaction : ton avis sera publié dans ⭐・avis-clients.",
+            ].join("\n"),
+        );
+}
+
+/** Delivery times up to this are shown on reviews; slower ones are left out. */
+export const REVIEW_MAX_SHOWN_MINUTES = 30;
+
+/** Real minutes from ticket opening to closing, or null when unknown. */
+export function transactionMinutes(ticket) {
+    const start = Date.parse(ticket?.openedAt ?? "");
+    const end = Date.parse(ticket?.closedAt ?? "");
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return null;
+    return Math.max(1, Math.round((end - start) / 60_000));
+}
+
+/** "250 M sur Draconiros", or "1 000 M Brial → 855 M Dakal" for an exchange. */
+function reviewAmount(ticket) {
+    const name = (code) => serverLabel(serverByCode(code)) || code;
+    if (ticket.transferFrom && ticket.transferTo) {
+        const received = ticket.received == null ? "" : `${formatMillions(ticket.received)} `;
+        return `${formatMillions(ticket.millions)} ${name(ticket.transferFrom)} → ${received}${name(ticket.transferTo)}`;
+    }
+    if (!ticket.millions) return null;
+    return `${formatMillions(ticket.millions)}${ticket.serverCode ? ` sur ${name(ticket.serverCode)}` : ""}`;
+}
+
+export function reviewEmbed({ author, rating, text, ticket }) {
     const stars = "⭐".repeat(Math.min(5, Math.max(1, rating)));
+    const type = TICKET_TYPES[ticket?.type];
+    const fields = [
+        { name: "✅ Commande vérifiée", value: type ? `${type.emoji} ${type.label}` : "Commande", inline: true },
+    ];
+    const amount = ticket ? reviewAmount(ticket) : null;
+    if (amount) fields.push({ name: type?.id === "echange" ? "♻️ Transfert" : "💰 Quantité", value: amount, inline: true });
+    const minutes = transactionMinutes(ticket);
+    if (minutes !== null && minutes <= REVIEW_MAX_SHOWN_MINUTES) {
+        fields.push({ name: "⏱️ Durée", value: `Livré en ${minutes} min`, inline: true });
+    }
+
     return baseEmbed({ color: BRAND.colors.brand })
         .setAuthor({ name: author.tag ?? author.username ?? "Client", iconURL: author.displayAvatarURL?.() })
         .setTitle(`${stars}  Avis client`)
         .setDescription(text)
-        .addFields({ name: "Transaction", value: kindLabelText, inline: true });
+        .addFields(fields);
 }
 
 export function helpEmbed(prefix) {
@@ -475,8 +606,7 @@ export function helpEmbed(prefix) {
                 "",
                 "**Marché**",
                 "`/rate` — voir les prix par serveur • `/rate auto` (prix web, staff) • modifier les prix (manager) : `/rate ajuster`, `/rate prix`, `/rate tableau`, `/rate set`\n📘 Guide complet : salon **📘・guide-du-bot** (staff)",
-                "`/stock` — voir le stock • `/stock set <serveur> <millions> <dispo|limite|complet>`",
-                "`/avis <note> <texte>` — laisser un avis",
+                "`/stock` — voir le stock • `/stock set <serveur> <millions> <dispo|limite|sur commande>`",
                 "",
                 "**Admin**",
                 "`/check` — diagnostic : permissions, hiérarchie des rôles, structure manquante",

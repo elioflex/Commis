@@ -1,4 +1,5 @@
 import { SETTINGS } from "../config.js";
+import { panelRow } from "./components.js";
 import { boardEmbed, guideEmbeds, panelEmbed } from "./embeds.js";
 import { findTextChannel } from "./guild-utils.js";
 import { read, update } from "./store.js";
@@ -44,7 +45,7 @@ async function refreshPanels(client) {
             if (entry) console.warn(`[live-board] panneau ${typeId} introuvable — republie-le avec /panel`);
             continue;
         }
-        await message.edit({ embeds: [panelEmbed(typeId)] });
+        await message.edit({ embeds: [panelEmbed(typeId)], components: [panelRow(typeId)] });
         edited += 1;
     }
     return edited;
@@ -136,6 +137,28 @@ export async function refreshGuide(client) {
         return true;
     } catch (error) {
         console.error("[live-board] guide-du-bot :", error.message);
+        return false;
+    }
+}
+
+/**
+ * ⭐・avis-clients is read-only for members: reviews only arrive through the
+ * button sent when a ticket is closed as delivered. Applied at boot; errors are
+ * logged, never thrown.
+ */
+export async function lockReviewChannel(client) {
+    try {
+        if (!client?.isReady?.()) return false;
+        const guild = SETTINGS.guildId ? client.guilds.cache.get(SETTINGS.guildId) : client.guilds.cache.first();
+        const channel = guild ? findTextChannel(guild, "⭐・avis-clients") ?? findTextChannel(guild, "avis-clients") : null;
+        if (!channel) return false;
+
+        const closed = { SendMessages: false, CreatePublicThreads: false, CreatePrivateThreads: false, SendMessagesInThreads: false };
+        await channel.permissionOverwrites.edit(guild.roles.everyone.id, closed, { reason: "Avis uniquement via le bouton de fin de ticket" });
+        await channel.permissionOverwrites.edit(client.user.id, { ViewChannel: true, SendMessages: true, EmbedLinks: true });
+        return true;
+    } catch (error) {
+        console.error("[live-board] avis-clients :", error.message);
         return false;
     }
 }
