@@ -1,8 +1,12 @@
 import { EmbedBuilder } from "discord.js";
 
 import {
+    ANTI_SCAM_LINE,
     BRAND,
     COMPETITORS,
+    CURRENCIES,
+    GUARANTEES,
+    PROCEDURES,
     PAYMENT_METHODS,
     SETTINGS,
     TICKET_TYPES,
@@ -129,8 +133,45 @@ export function panelEmbed(typeId) {
             inline: false,
         });
     }
+    if (isMarketType(typeId)) embed.addFields({ name: "🛡️ Sécurité", value: ANTI_SCAM_LINE, inline: false });
 
     return embed;
+}
+
+/* ───────────────────────── Trust buttons (🛡️ 📦 💳) ───────────────────────── */
+
+export function guaranteeEmbed() {
+    return baseEmbed({ color: BRAND.colors.success })
+        .setTitle(`🛡️ Nos garanties • ${BRAND.name}`)
+        .setDescription([...GUARANTEES, "", ANTI_SCAM_LINE].join("\n"));
+}
+
+export function procedureEmbed(typeId) {
+    const type = TICKET_TYPES[typeId];
+    const steps = PROCEDURES[typeId] ?? [];
+    const numbers = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣"];
+    return baseEmbed({ color: type?.color })
+        .setTitle(`📦 Procédure • ${type ? `${type.emoji} ${type.label}` : "Commande"}`)
+        .setDescription(
+            [
+                ...steps.map((step, index) => `${numbers[index] ?? "•"} ${step}`),
+                "",
+                "🕐 Pas de stock sur ton serveur ? Ouvre ton ticket quand même : on lance la procédure et on livre dès que c'est prêt.",
+            ].join("\n"),
+        );
+}
+
+export function paymentMethodsEmbed() {
+    return baseEmbed({ color: BRAND.colors.info })
+        .setTitle("💳 Moyens de paiement")
+        .setDescription(
+            [
+                PAYMENT_METHODS.map((m) => `${m.emoji} ${m.label}`).join("\n"),
+                "",
+                `Devises : ${CURRENCIES.map((c) => `**${c.label}** (${c.symbol})`).join(" • ")}`,
+                "Tu choisis ton moyen de paiement en ouvrant ton ticket ; le staff te donne les instructions **dans le ticket uniquement**.",
+            ].join("\n"),
+        );
 }
 
 /** How an exchange is computed, in one line for the panel and the live board. */
@@ -357,6 +398,11 @@ export function guideEmbeds() {
                 "5. Un **ticket privé** s'ouvre avec le résumé et le total estimé.",
                 "Un client ne peut avoir qu'**un seul ticket ouvert** à la fois.",
                 "",
+                "**🛡️ Boutons de confiance sur les panneaux**",
+                "• **🔔 Alerte stock** (achat, échange) — le client choisit des serveurs ; dès que `/stock set` remet du stock sur l'un d'eux, il reçoit un DM (une seule fois).",
+                "• **📦 Procédure**, **🛡️ Garantie**, **💳 Méthodes** — réponses toutes prêtes, visibles seulement par le client.",
+                "• Les avis affichent la **référence du ticket** et le **staff** qui l'a pris en charge.",
+                "",
                 "**🎟️ Vie d'un ticket**",
                 "Nouveau → Préparation → Paiement → Terminé → Archivé.",
                 "Dans le ticket, les boutons **Prendre en charge**, **Étape**, **Accès**, **Transcript** et **Fermer** " +
@@ -422,7 +468,7 @@ export function guideEmbeds() {
                 name: "📦 Stock — `/stock`",
                 value: [
                     "👤 `/stock voir` — stock par serveur.",
-                    "🧑‍💼 `/stock set <serveur> <millions> <dispo|limite|sur commande>` — mettre à jour (🟢 🟡 🕐 sur les panneaux ; 🕐 = sur commande, le client peut toujours commander).",
+                    "🧑‍💼 `/stock set <serveur> <millions> <dispo|limite|sur commande>` — mettre à jour (🟢 🟡 🕐 sur les panneaux ; 🕐 = sur commande, le client peut toujours commander). Repasser un serveur de 🕐 à 🟢/🟡 prévient les clients en 🔔 alerte.",
                 ].join("\n"),
             },
             {
@@ -581,6 +627,9 @@ export function reviewEmbed({ author, rating, text, ticket }) {
     if (minutes !== null && minutes <= REVIEW_MAX_SHOWN_MINUTES) {
         fields.push({ name: "⏱️ Durée", value: `Livré en ${minutes} min`, inline: true });
     }
+    if (ticket?.id) fields.push({ name: "🧾 Référence", value: `\`${ticket.id}\``, inline: true });
+    const staffId = ticket?.claimedBy ?? ticket?.closedBy;
+    if (staffId) fields.push({ name: "🧑‍💼 Staff", value: `<@${staffId}>`, inline: true });
 
     return baseEmbed({ color: BRAND.colors.brand })
         .setAuthor({ name: author.tag ?? author.username ?? "Client", iconURL: author.displayAvatarURL?.() })

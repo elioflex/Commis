@@ -45,10 +45,12 @@ import {
     setServerMultiplier,
     setServerPrice,
     setStock,
+    stockFor,
 } from "./market.js";
 import { checkGuild, formatChecks } from "./preflight.js";
 import { priceFeedRunning, runPriceFeed } from "./price-feed.js";
 import { setupGuild } from "./setup.js";
+import { isRestock, notifyRestock, subscribersFor } from "./stock-alerts.js";
 import { update } from "./store.js";
 import {
     claimTicket,
@@ -671,17 +673,30 @@ export async function runCommand(client, interaction) {
         const millions = interaction.options.getNumber("millions", true);
         const statusOption = interaction.options.getString("statut");
         const status = statusOption ?? (millions > 100 ? "open" : millions > 0 ? "low" : "full");
+        const before = stockFor(serverCode);
         setStock(serverCode, millions, status);
         refreshMarketDisplays(client);
 
-        return reply(interaction, {
+        const after = stockFor(serverCode);
+        const waiting = isRestock(before, after) ? subscribersFor(serverCode).length : 0;
+        await reply(interaction, {
             embeds: [
                 successEmbed(
-                    `**${serverLabel(serverByCode(serverCode)) || serverCode}** → ${formatMillions(millions)} (${status})`,
+                    [
+                        `**${serverLabel(serverByCode(serverCode)) || serverCode}** → ${formatMillions(millions)} (${status})`,
+                        waiting ? `🔔 ${waiting} client${waiting > 1 ? "s" : ""} en alerte, message privé en cours d'envoi.` : null,
+                    ]
+                        .filter(Boolean)
+                        .join("\n"),
                     "📦 Stock mis à jour",
                 ),
             ],
         });
+        if (waiting) {
+            const sent = await notifyRestock(client, serverCode, after);
+            console.log(`[stock-alerts] ${serverCode}: ${sent}/${waiting} DM envoyés`);
+        }
+        return undefined;
     }
 
     if (commandName === "ticket") {

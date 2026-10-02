@@ -13,6 +13,7 @@ const DEFAULTS = {
     "tickets.json": { counter: 0, open: {}, closed: [] },
     "reviews.json": { entries: [] },
     "panels.json": { posted: {} },
+    "alerts.json": { users: {} },
 };
 
 const cache = new Map();

@@ -2,6 +2,8 @@ import { AttachmentBuilder, MessageFlags } from "discord.js";
 
 import { CURRENCY_CODES, TICKET_TYPES, paymentByCode, serverByCode, serverLabel } from "../config.js";
 import {
+    alertClearRow,
+    alertSelectRow,
     closeReason,
     closeReasonRow,
     confirmRow,
@@ -22,7 +24,19 @@ import {
     serverSelectRow,
     simpleModal,
 } from "./components.js";
-import { baseEmbed, errorEmbed, exchangeRecapEmbed, exchangeSimEmbed, infoEmbed, onOrderLine, reviewEmbed, successEmbed } from "./embeds.js";
+import {
+    baseEmbed,
+    errorEmbed,
+    exchangeRecapEmbed,
+    exchangeSimEmbed,
+    guaranteeEmbed,
+    infoEmbed,
+    onOrderLine,
+    paymentMethodsEmbed,
+    procedureEmbed,
+    reviewEmbed,
+    successEmbed,
+} from "./embeds.js";
 import { isManager, isStaff } from "./guild-utils.js";
 import { refreshMarketDisplays } from "./live-board.js";
 import {
@@ -38,6 +52,7 @@ import {
     setServerPrice,
 } from "./market.js";
 
+import { alertListLine, alertsFor, setAlerts } from "./stock-alerts.js";
 import { update } from "./store.js";
 import { buildTranscript } from "./transcript.js";
 import {
@@ -118,7 +133,39 @@ async function handleButton(client, interaction) {
     }
     if (scope === "ticket") return handleTicketButton(client, interaction, rest);
     if (scope === "review" && rest[0] === "open") return openReview(interaction, rest[1]);
+    if (scope === "info") return handleInfoButton(interaction, rest);
+    if (scope === "alert" && rest[0] === "start") return respond(interaction, alertPanel(interaction.user.id));
+    if (scope === "alert" && rest[0] === "clear") {
+        setAlerts(interaction.user.id, interaction.guildId, []);
+        return interaction.update(alertPanel(interaction.user.id));
+    }
     return undefined;
+}
+
+/** 🛡️ Garantie / 📦 Procédure / 💳 Méthodes: private answers from the panels. */
+function handleInfoButton(interaction, rest) {
+    if (rest[0] === "guarantee") return respond(interaction, { embeds: [guaranteeEmbed()] });
+    if (rest[0] === "proc" && TICKET_TYPES[rest[1]]) return respond(interaction, { embeds: [procedureEmbed(rest[1])] });
+    if (rest[0] === "pay") return respond(interaction, { embeds: [paymentMethodsEmbed()] });
+    return undefined;
+}
+
+function alertPanel(userId) {
+    const current = alertsFor(userId);
+    return {
+        embeds: [
+            infoEmbed(
+                [
+                    "Choisis les serveurs à surveiller : dès qu'on a du stock prêt à livrer sur l'un d'eux, je t'envoie un **message privé**.",
+                    "_Pense à autoriser les messages privés de ce serveur._",
+                    "",
+                    alertListLine(current),
+                ].join("\n"),
+                "🔔 Alerte stock",
+            ),
+        ],
+        components: [alertSelectRow(current), alertClearRow()],
+    };
 }
 
 async function handlePanelButton(interaction, typeId) {
@@ -305,6 +352,11 @@ async function handleTicketButton(client, interaction, rest) {
 
 async function handleSelect(interaction) {
     const [scope, ...rest] = interaction.customId.split(":");
+
+    if (scope === "alert" && rest[0] === "set") {
+        setAlerts(interaction.user.id, interaction.guildId, interaction.values);
+        return interaction.update(alertPanel(interaction.user.id));
+    }
 
     if (scope === "flow" && rest[0] === "srv") {
         const typeId = rest[1];

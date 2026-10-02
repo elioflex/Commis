@@ -208,8 +208,7 @@ test("exchange displays show stock only, the simulator gives the amount", () => 
         assert.ok(!text.includes("€") && !text.includes("DH"), "no price on the exchange displays");
     }
     const ids = panelRow("echange").toJSON().components.map((button) => button.custom_id);
-    assert.deepEqual(ids, ["panel:echange", "xchg:sim"]);
-    assert.equal(panelRow("achat").toJSON().components.length, 1);
+    assert.deepEqual(ids, ["panel:echange", "xchg:sim", "alert:start", "info:proc:echange", "info:guarantee"]);
 
     const [from, to] = DOFUS_SERVERS;
     withExchangePrices({ [from.code]: 0.38, [to.code]: 0.4 }, () => {

@@ -23,6 +23,12 @@ export const closeReason = (code) => CLOSE_REASONS.find((r) => r.code === code) 
 
 /* ───────────────────────── Panels ───────────────────────── */
 
+const MARKET_PANELS = ["achat", "vente", "echange"];
+
+const infoButton = (customId, label, emoji) =>
+    new ButtonBuilder().setCustomId(customId).setLabel(label).setEmoji(emoji).setStyle(ButtonStyle.Secondary);
+
+/** Main action, then the trust buttons (5 max per row). */
 export function panelRow(typeId) {
     const type = TICKET_TYPES[typeId];
     const row = new ActionRowBuilder().addComponents(
@@ -41,7 +47,40 @@ export function panelRow(typeId) {
                 .setStyle(ButtonStyle.Primary),
         );
     }
+    if (!MARKET_PANELS.includes(typeId)) return row;
+
+    if (typeId !== "vente") row.addComponents(infoButton("alert:start", "Alerte stock", "🔔"));
+    row.addComponents(infoButton(`info:proc:${typeId}`, "Procédure", "📦"), infoButton("info:guarantee", "Garantie", "🛡️"));
+    if (typeId !== "echange") row.addComponents(infoButton("info:pay", "Méthodes", "💳"));
     return row;
+}
+
+/* ───────────────────────── Stock alerts ───────────────────────── */
+
+export function alertSelectRow(selected = []) {
+    const options = DOFUS_SERVERS.slice(0, 25).map((server) => ({
+        label: serverLabel(server),
+        value: server.code,
+        default: selected.includes(server.code),
+    }));
+    return new ActionRowBuilder().addComponents(
+        new StringSelectMenuBuilder()
+            .setCustomId("alert:set")
+            .setPlaceholder("🔔 Serveurs à surveiller")
+            .setMinValues(0)
+            .setMaxValues(options.length)
+            .addOptions(options),
+    );
+}
+
+export function alertClearRow() {
+    return new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+            .setCustomId("alert:clear")
+            .setLabel("Supprimer mes alertes")
+            .setEmoji("🔕")
+            .setStyle(ButtonStyle.Secondary),
+    );
 }
 
 /* ───────────────────────── Ticket header ───────────────────────── */

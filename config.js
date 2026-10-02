@@ -208,6 +208,47 @@ export const TICKET_TYPES = {
 
 export const TICKET_TYPE_IDS = Object.keys(TICKET_TYPES);
 
+/**
+ * Promises shown behind the 🛡️ Garantie button. Customers read them as a
+ * commitment: keep only what the team really does.
+ */
+export const GUARANTEES = [
+    "🤝 **Livraison par échange direct en jeu**, par un membre du staff : pas d'HDV, pas de taxe.",
+    "✅ **Tu reçois exactement la quantité** indiquée dans ton ticket.",
+    "🧾 **Chaque commande a son ticket privé et sa référence** : tout est tracé.",
+    "↩️ **Remboursement intégral si on ne peut pas livrer** : ouvre un ticket Remboursement.",
+    "⭐ **Tous les avis sont publiés**, les bons comme les mauvais.",
+];
+
+/** Steps shown behind the 📦 Procédure button, per market panel. */
+export const PROCEDURES = {
+    achat: [
+        "Clique sur **Achat de kamas**, choisis ton serveur, ton moyen de paiement et la quantité.",
+        "Ton **ticket privé** s'ouvre avec le prix total calculé.",
+        "Un membre du staff confirme la commande et t'indique comment payer.",
+        "Il te **livre en jeu par échange direct**.",
+        "Ticket fermé : tu reçois un message pour laisser ton avis.",
+    ],
+    vente: [
+        "Clique sur **Vente de kamas**, choisis ton serveur, comment tu veux être payé et la quantité.",
+        "Ton **ticket privé** s'ouvre avec le montant calculé.",
+        "Un membre du staff te rejoint en jeu et **récupère tes kamas par échange direct**.",
+        "On te **paie** avec le moyen choisi.",
+        "Ticket fermé : tu reçois un message pour laisser ton avis.",
+    ],
+    echange: [
+        "Clique sur **🧮 Simuler mon échange** pour connaître le montant exact, ou directement sur **Échange de kamas**.",
+        "Choisis le serveur où tu **donnes**, celui où tu **reçois**, et la quantité.",
+        "Ton **ticket privé** s'ouvre avec le montant que tu vas recevoir.",
+        "Tu donnes tes kamas au staff sur le premier serveur, il te **livre sur le second** par échange direct.",
+        "Ticket fermé : tu reçois un message pour laisser ton avis.",
+    ],
+};
+
+/** Shown on every market panel: all business happens in tickets. */
+export const ANTI_SCAM_LINE =
+    "🚨 **Anti-arnaque** : aucun membre du staff ne te demandera de payer en message privé. Tout se passe dans **ton ticket** sur ce serveur.";
+
 /** Columns (categories) a ticket can be moved through. */
 export const TICKET_STAGES = [
     { id: "nouveau", name: "🎟️ | Nouveaux tickets", emoji: "🎟️", label: "Nouveaux tickets" },

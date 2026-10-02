@@ -3,4 +3,5 @@ node_modules/
 data/tickets.json
 data/reviews.json
 data/panels.json
+data/alerts.json
 data/*.tmp
