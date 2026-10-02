@@ -4,6 +4,7 @@ import { BRAND, SETTINGS, TICKET_STAGES, TICKET_TYPES, serverByCode } from "../c
 import { infoEmbed, reviewRequestEmbed, ticketClosedEmbed, ticketIntroEmbed } from "./embeds.js";
 import { ensureCategory, logChannel, staffRole, transcriptChannel } from "./guild-utils.js";
 import { quote, effectiveRate } from "./market.js";
+import { TICKET_LOCK_HOURS } from "./price-lock.js";
 import { read, update } from "./store.js";
 import { reviewButtonRow, ticketActionRow } from "./components.js";
 import { buildTranscript } from "./transcript.js";
@@ -132,7 +133,16 @@ export async function openTicket({ guild, member, typeId, payload = {} }) {
     const currency = payload.currency ? String(payload.currency).toUpperCase() : type.needsPayment ? "EUR" : null;
     const millions = payload.millions ?? null;
     // Prix spécifique au serveur choisi (taux de base × multiplicateur).
-    const rate = currency && rateKind ? effectiveRate(currency, rateKind, payload.serverCode) : null;
+    const rate =
+        payload.rate !== undefined && payload.rate !== null
+            ? payload.rate
+            : currency && rateKind
+              ? effectiveRate(currency, rateKind, payload.serverCode)
+              : null;
+    const priceLockedUntil =
+        rate !== null && (rateKind === "buy" || rateKind === "sell")
+            ? new Date(Date.now() + TICKET_LOCK_HOURS * 3_600_000).toISOString()
+            : null;
     const total = quote(rateKind, millions, rate)?.total ?? null;
 
     const ticket = {
@@ -151,6 +161,8 @@ export async function openTicket({ guild, member, typeId, payload = {} }) {
         millions,
         rate,
         total,
+        priceLockedUntil,
+        offerId: payload.offerId ?? null,
         serverCode: payload.serverCode ?? null,
         transferFrom: payload.transferFrom ?? null,
         transferTo: payload.transferTo ?? null,

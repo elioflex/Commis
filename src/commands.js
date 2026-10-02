@@ -11,7 +11,7 @@ import {
     serverByCode,
     serverLabel,
 } from "../config.js";
-import { panelRow, priceTableModal } from "./components.js";
+import { panelRows, priceTableModal } from "./components.js";
 import {
     errorEmbed,
     feedStatusEmbed,
@@ -395,7 +395,7 @@ export async function runCommand(client, interaction) {
 
         const message = await interaction.channel.send({
             embeds: [panelEmbed(typeId)],
-            components: [panelRow(typeId)],
+            components: panelRows(typeId),
         });
 
         update("panels.json", (data) => {

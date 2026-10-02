@@ -1,7 +1,7 @@
 import { ChannelType } from "discord.js";
 
 import { LAYOUT, PAYMENT_METHODS, ROLES, SETTINGS, TICKET_STAGES } from "../config.js";
-import { panelRow } from "./components.js";
+import { panelRows } from "./components.js";
 import { panelEmbed } from "./embeds.js";
 import { ensureCategory, findTextChannel, sleep, staffOverwrites } from "./guild-utils.js";
 import { update } from "./store.js";
@@ -153,7 +153,7 @@ export async function setupGuild(
                     const message = await created
                         .send({
                             embeds: [panelEmbed(definition.panel)],
-                            components: [panelRow(definition.panel)],
+                            components: panelRows(definition.panel),
                         })
                         .catch(() => null);
                     if (message) {

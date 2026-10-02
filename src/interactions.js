@@ -1,6 +1,6 @@
 import { AttachmentBuilder, MessageFlags } from "discord.js";
 
-import { CURRENCY_CODES, TICKET_TYPES, paymentByCode, serverByCode, serverLabel } from "../config.js";
+import { CURRENCIES, CURRENCY_CODES, TICKET_TYPES, paymentByCode, serverByCode, serverLabel } from "../config.js";
 import {
     alertClearRow,
     alertSelectRow,
@@ -17,12 +17,17 @@ import {
     memberModeRow,
     memberSelectRow,
     moveStageRow,
+    offerDecisionRow,
+    offerModal,
+    offerServerRow,
     paymentSelectRow,
     renameModal,
     reviewButtonRow,
     reviewModal,
     serverSelectRow,
     simpleModal,
+    watchClearRow,
+    watchSelectRow,
 } from "./components.js";
 import {
     baseEmbed,
@@ -37,7 +42,7 @@ import {
     reviewEmbed,
     successEmbed,
 } from "./embeds.js";
-import { isManager, isStaff } from "./guild-utils.js";
+import { isManager, isStaff, offersChannel } from "./guild-utils.js";
 import { refreshMarketDisplays } from "./live-board.js";
 import {
     parseMillions,
@@ -52,6 +57,19 @@ import {
     setServerPrice,
 } from "./market.js";
 
+import {
+    OFFER_KINDS,
+    createOffer,
+    decideOffer,
+    offerAcceptedEmbed,
+    offerById,
+    offerRefusedEmbed,
+    offerSentEmbed,
+    offerStaffEmbed,
+    parsePrice,
+} from "./offers.js";
+import { lockQuote, lockedRate, quoteLockLine, releaseQuote } from "./price-lock.js";
+import { WATCH_KINDS, setWatches, watchListLine, watchesFor } from "./price-watch.js";
 import { alertListLine, alertsFor, setAlerts } from "./stock-alerts.js";
 import { update } from "./store.js";
 import { buildTranscript } from "./transcript.js";
@@ -139,7 +157,110 @@ async function handleButton(client, interaction) {
         setAlerts(interaction.user.id, interaction.guildId, []);
         return interaction.update(alertPanel(interaction.user.id));
     }
+    if (scope === "watch" && WATCH_KINDS.includes(rest[1])) {
+        if (rest[0] === "start") return respond(interaction, watchPanel(interaction.user.id, rest[1]));
+        if (rest[0] === "clear") {
+            setWatches(interaction.user.id, interaction.guildId, rest[1], []);
+            return interaction.update(watchPanel(interaction.user.id, rest[1]));
+        }
+    }
+    if (scope === "offer" && rest[0] === "start" && OFFER_KINDS.includes(rest[1])) {
+        return respond(interaction, {
+            embeds: [
+                infoEmbed(
+                    "Choisis le serveur, puis indique la quantité et **ton prix par M**. Le staff accepte ou refuse, et tu reçois la réponse en message privé.",
+                    "💼 Faire une offre",
+                ),
+            ],
+            components: [offerServerRow(rest[1])],
+        });
+    }
+    if (scope === "offer" && (rest[0] === "accept" || rest[0] === "refuse")) {
+        return decideOfferButton(interaction, rest[0], rest[1]);
+    }
     return undefined;
+}
+
+function watchPanel(userId, kind) {
+    const current = watchesFor(userId, kind);
+    const what = kind === "buy" ? "notre **prix de vente**" : "notre **prix de rachat**";
+    return {
+        embeds: [
+            infoEmbed(
+                [
+                    `Choisis les serveurs dont tu veux suivre ${what} : je t'envoie un **message privé** quand il bouge de 3 % ou plus.`,
+                    "_Pense à autoriser les messages privés de ce serveur._",
+                    "",
+                    watchListLine(current),
+                ].join("\n"),
+                "📈 Suivi prix",
+            ),
+        ],
+        components: [watchSelectRow(kind, current), watchClearRow(kind)],
+    };
+}
+
+async function dm(client, userId, payload) {
+    try {
+        const user = await client.users.fetch(userId);
+        await user.send(payload);
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+/** Staff decision on a 💼 offer: accept opens a ticket at the agreed price. */
+async function decideOfferButton(interaction, action, offerId) {
+    if (!(await needStaff(interaction))) return undefined;
+    const pending = offerById(offerId);
+    if (!pending) return respond(interaction, { embeds: [errorEmbed("Offre introuvable.")] });
+
+    const offer = decideOffer(offerId, action === "accept" ? "accepted" : "refused", interaction.user.id);
+    if (!offer) {
+        return respond(interaction, { embeds: [infoEmbed("Cette offre a déjà été traitée.", "💼 Offre")] });
+    }
+    await interaction.update({ embeds: [offerStaffEmbed(offer)], components: [offerDecisionRow(offer.id, { disabled: true })] });
+
+    if (action === "refuse") {
+        const reached = await dm(interaction.client, offer.userId, { embeds: [offerRefusedEmbed(offer)] });
+        if (!reached) await interaction.followUp({ content: `⚠️ <@${offer.userId}> n'accepte pas les MP : préviens-le autrement.`, ephemeral: true });
+        return undefined;
+    }
+
+    const member = await interaction.guild.members.fetch(offer.userId).catch(() => null);
+    if (!member) {
+        return interaction.followUp({ content: "⚠️ Le client n'est plus sur le serveur : aucun ticket ouvert.", ephemeral: true });
+    }
+    const result = await openTicket({
+        guild: interaction.guild,
+        member,
+        typeId: offer.kind === "buy" ? "achat" : "vente",
+        payload: {
+            serverCode: offer.serverCode,
+            millions: offer.millions,
+            currency: offer.currency,
+            rate: offer.price,
+            personnage: offer.personnage ?? undefined,
+            notes: `💼 Offre acceptée \`${offer.id}\` par <@${interaction.user.id}> : ${formatMoney(offer.price, offer.currency)}/M.`,
+            offerId: offer.id,
+        },
+    });
+
+    if (result.duplicate) {
+        // One open ticket per customer: the agreed price goes into the one they already have.
+        const channel = interaction.guild.channels.cache.get(result.duplicate.channelId);
+        await channel
+            ?.send({ embeds: [offerAcceptedEmbed(offer, null)], content: `<@${offer.userId}>` })
+            .catch(() => null);
+        await dm(interaction.client, offer.userId, { embeds: [offerAcceptedEmbed(offer, result.duplicate.channelId)] });
+        return interaction.followUp({
+            content: `ℹ️ Le client a déjà un ticket ouvert (<#${result.duplicate.channelId}>) : l'offre y a été postée, le prix est à appliquer à la main.`,
+            ephemeral: true,
+        });
+    }
+    await dm(interaction.client, offer.userId, { embeds: [offerAcceptedEmbed(offer, result.channel.id)] });
+    return interaction.followUp({ content: `🎟️ Ticket ouvert : <#${result.channel.id}>`, ephemeral: true });
 }
 
 /** 🛡️ Garantie / 📦 Procédure / 💳 Méthodes: private answers from the panels. */
@@ -189,6 +310,15 @@ async function handlePanelButton(interaction, typeId) {
         ],
         components: [serverSelectRow(typeId)],
     });
+}
+
+/** "1,55 € · 16,68 DH" at the prices held for this customer. */
+function lockedSummary(userId, kind, serverCode) {
+    const cells = CURRENCIES.map((currency) => {
+        const rate = lockedRate(userId, kind, serverCode, currency.code);
+        return rate === null ? null : formatMoney(rate, currency.code);
+    }).filter(Boolean);
+    return cells.length ? cells.join(" · ") : serverPriceSummary(kind, serverCode);
 }
 
 /** Exchange step 1: pick the server the customer gives kamas on. */
@@ -357,6 +487,13 @@ async function handleSelect(interaction) {
         setAlerts(interaction.user.id, interaction.guildId, interaction.values);
         return interaction.update(alertPanel(interaction.user.id));
     }
+    if (scope === "watch" && rest[0] === "set" && WATCH_KINDS.includes(rest[1])) {
+        setWatches(interaction.user.id, interaction.guildId, rest[1], interaction.values);
+        return interaction.update(watchPanel(interaction.user.id, rest[1]));
+    }
+    if (scope === "offer" && rest[0] === "srv" && OFFER_KINDS.includes(rest[1])) {
+        return interaction.showModal(offerModal(rest[1], interaction.values[0]));
+    }
 
     if (scope === "flow" && rest[0] === "srv") {
         const typeId = rest[1];
@@ -367,10 +504,13 @@ async function handleSelect(interaction) {
         const label = serverLabel(serverByCode(serverCode)) || serverCode;
         const kind = typeId === "achat" ? "buy" : typeId === "vente" ? "sell" : "exchange";
         const rate = effectiveRate("EUR", kind, serverCode);
+        const lockUntil = rate !== null && kind !== "exchange" ? lockQuote(interaction.user.id, kind, serverCode) : null;
         const priceLine =
             rate === null
                 ? "Taux : à confirmer avec le staff"
-                : `Prix sur ce serveur (par M) : **${serverPriceSummary(kind, serverCode)}**`;
+                : [`Prix sur ce serveur (par M) : **${lockedSummary(interaction.user.id, kind, serverCode)}**`, quoteLockLine(lockUntil)]
+                      .filter(Boolean)
+                      .join("\n");
 
         if (!type.needsPayment) {
             return interaction.update({
@@ -416,7 +556,7 @@ async function handleSelect(interaction) {
         const paymentCode = interaction.values[0];
         const type = TICKET_TYPES[typeId];
         const rateKind = typeId === "achat" ? "buy" : typeId === "vente" ? "sell" : "exchange";
-        const rate = effectiveRate("EUR", rateKind, serverCode);
+        const rate = lockedRate(interaction.user.id, rateKind, serverCode, "EUR");
         const paymentLabel = paymentByCode(paymentCode);
         return interaction.update({
             embeds: [
@@ -574,8 +714,41 @@ async function handleModal(client, interaction) {
     }
 
     if (scope === "modal" && rest[0] === "review") return submitReview(client, interaction, rest[1]);
+    if (scope === "offer" && rest[0] === "modal") return submitOffer(interaction, rest[1], rest[2]);
 
     return undefined;
+}
+
+async function submitOffer(interaction, kind, serverCode) {
+    if (!OFFER_KINDS.includes(kind) || !serverByCode(serverCode)) {
+        return respond(interaction, { embeds: [errorEmbed("Offre invalide.")] });
+    }
+    const millions = parseMillions(interaction.fields.getTextInputValue("millions"));
+    const price = parsePrice(interaction.fields.getTextInputValue("price"));
+    const currency = interaction.fields.getTextInputValue("currency").trim().toUpperCase();
+    const problems = [
+        millions === null && "Quantité invalide (ex : `500`).",
+        price === null && "Prix par M invalide (ex : `1.40`).",
+        !CURRENCY_CODES.includes(currency) && `Devise inconnue : utilise ${CURRENCY_CODES.join(" ou ")}.`,
+    ].filter(Boolean);
+    if (problems.length) return respond(interaction, { embeds: [errorEmbed(problems.join("\n"))] });
+
+    const channel = offersChannel(interaction.guild);
+    if (!channel) {
+        return respond(interaction, { embeds: [errorEmbed("Les offres sont indisponibles pour le moment. Ouvre un ticket à la place.")] });
+    }
+    const offer = createOffer({
+        guildId: interaction.guildId,
+        userId: interaction.user.id,
+        kind,
+        serverCode,
+        millions,
+        price,
+        currency,
+        personnage: interaction.fields.getTextInputValue("personnage").trim(),
+    });
+    await channel.send({ embeds: [offerStaffEmbed(offer)], components: [offerDecisionRow(offer.id)] });
+    return respond(interaction, { embeds: [offerSentEmbed(offer)] });
 }
 
 async function createTicketFromModal(interaction, typeId, serverCode, paymentCode) {
@@ -611,8 +784,9 @@ async function createTicketFromModal(interaction, typeId, serverCode, paymentCod
         if (notes) payload.notes = notes;
 
         const rateKind = typeId === "achat" ? "buy" : typeId === "vente" ? "sell" : "exchange";
-        // Prix réel : taux de base × multiplicateur du serveur choisi.
-        const rate = effectiveRate(currency, rateKind, serverCode);
+        // Price held since the server was picked (or today's, if better for the customer).
+        const rate = lockedRate(interaction.user.id, rateKind, serverCode, currency);
+        payload.rate = rate;
         const q = quote(rateKind, millions, rate);
         if (q) payload.totalPreview = q.total;
     } else {
@@ -643,6 +817,7 @@ async function createTicketFromModal(interaction, typeId, serverCode, paymentCod
     }
 
     const { ticket, channel } = result;
+    if (ticket.rateKind) releaseQuote(interaction.user.id, ticket.rateKind, serverCode);
     const summary =
         type.needsQuantity && payload.millions
             ? `\n**${formatMillions(payload.millions)}** • ${payload.currency} • ${serverLabel(serverByCode(serverCode))}` +

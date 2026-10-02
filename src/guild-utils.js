@@ -78,6 +78,11 @@ export async function ensureCategory(guild, name, { staffOnly = false } = {}) {
     });
 }
 
+/** Where customers' price offers land for the staff (falls back to the logs). */
+export function offersChannel(guild) {
+    return findTextChannel(guild, "💼・offres") ?? findTextChannel(guild, "offres") ?? logChannel(guild);
+}
+
 /** The channel where the bot writes logs (setup result, ticket openings, errors). */
 export function logChannel(guild) {
     if (SETTINGS.logChannelId) {

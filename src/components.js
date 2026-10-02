@@ -28,8 +28,11 @@ const MARKET_PANELS = ["achat", "vente", "echange"];
 const infoButton = (customId, label, emoji) =>
     new ButtonBuilder().setCustomId(customId).setLabel(label).setEmoji(emoji).setStyle(ButtonStyle.Secondary);
 
-/** Main action, then the trust buttons (5 max per row). */
-export function panelRow(typeId) {
+/**
+ * Row 1: main action and the customer tools (alerts, price watch, offers).
+ * Row 2 (market panels only): the trust buttons.
+ */
+export function panelRows(typeId) {
     const type = TICKET_TYPES[typeId];
     const row = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
@@ -47,12 +50,23 @@ export function panelRow(typeId) {
                 .setStyle(ButtonStyle.Primary),
         );
     }
-    if (!MARKET_PANELS.includes(typeId)) return row;
+    if (!MARKET_PANELS.includes(typeId)) return [row];
 
+    const kind = typeId === "achat" ? "buy" : "sell";
     if (typeId !== "vente") row.addComponents(infoButton("alert:start", "Alerte stock", "🔔"));
-    row.addComponents(infoButton(`info:proc:${typeId}`, "Procédure", "📦"), infoButton("info:guarantee", "Garantie", "🛡️"));
-    if (typeId !== "echange") row.addComponents(infoButton("info:pay", "Méthodes", "💳"));
-    return row;
+    if (typeId !== "echange") {
+        row.addComponents(
+            infoButton(`watch:start:${kind}`, "Suivi prix", "📈"),
+            infoButton(`offer:start:${kind}`, "Faire une offre", "💼"),
+        );
+    }
+
+    const trust = new ActionRowBuilder().addComponents(
+        infoButton(`info:proc:${typeId}`, "Procédure", "📦"),
+        infoButton("info:guarantee", "Garantie", "🛡️"),
+    );
+    if (typeId !== "echange") trust.addComponents(infoButton("info:pay", "Méthodes", "💳"));
+    return [row, trust];
 }
 
 /* ───────────────────────── Stock alerts ───────────────────────── */
@@ -80,6 +94,86 @@ export function alertClearRow() {
             .setLabel("Supprimer mes alertes")
             .setEmoji("🔕")
             .setStyle(ButtonStyle.Secondary),
+    );
+}
+
+/* ───────────────────────── Price watch ───────────────────────── */
+
+export function watchSelectRow(kind, selected = []) {
+    const options = DOFUS_SERVERS.slice(0, 25).map((server) => ({
+        label: serverLabel(server),
+        value: server.code,
+        default: selected.includes(server.code),
+    }));
+    return new ActionRowBuilder().addComponents(
+        new StringSelectMenuBuilder()
+            .setCustomId(`watch:set:${kind}`)
+            .setPlaceholder("📈 Serveurs à suivre")
+            .setMinValues(0)
+            .setMaxValues(options.length)
+            .addOptions(options),
+    );
+}
+
+export function watchClearRow(kind) {
+    return new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+            .setCustomId(`watch:clear:${kind}`)
+            .setLabel("Arrêter le suivi")
+            .setEmoji("📉")
+            .setStyle(ButtonStyle.Secondary),
+    );
+}
+
+/* ───────────────────────── Offers ───────────────────────── */
+
+export function offerServerRow(kind) {
+    return new ActionRowBuilder().addComponents(
+        new StringSelectMenuBuilder()
+            .setCustomId(`offer:srv:${kind}`)
+            .setPlaceholder("🌍 Serveur de l'offre")
+            .addOptions(
+                DOFUS_SERVERS.slice(0, 25).map((server) => ({ label: serverLabel(server), value: server.code })),
+            ),
+    );
+}
+
+export function offerModal(kind, serverCode) {
+    const input = (id, label, placeholder, required = true) =>
+        new ActionRowBuilder().addComponents(
+            new TextInputBuilder()
+                .setCustomId(id)
+                .setLabel(label)
+                .setPlaceholder(placeholder)
+                .setStyle(TextInputStyle.Short)
+                .setRequired(required)
+                .setMaxLength(60),
+        );
+    return new ModalBuilder()
+        .setCustomId(`offer:modal:${kind}:${serverCode}`)
+        .setTitle(kind === "buy" ? "💼 Offre d'achat" : "💼 Offre de vente")
+        .addComponents(
+            input("millions", "Quantité (en millions)", "ex : 500"),
+            input("price", "Ton prix par M", "ex : 1.40"),
+            input("currency", `Devise (${CURRENCIES.map((c) => c.code).join(" / ")})`, "EUR"),
+            input("personnage", "Pseudo du personnage", "ex : Kamasdu93", false),
+        );
+}
+
+export function offerDecisionRow(offerId, { disabled = false } = {}) {
+    return new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+            .setCustomId(`offer:accept:${offerId}`)
+            .setLabel("Accepter")
+            .setEmoji("✅")
+            .setStyle(ButtonStyle.Success)
+            .setDisabled(disabled),
+        new ButtonBuilder()
+            .setCustomId(`offer:refuse:${offerId}`)
+            .setLabel("Refuser")
+            .setEmoji("❌")
+            .setStyle(ButtonStyle.Danger)
+            .setDisabled(disabled),
     );
 }
 

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { DOFUS_SERVERS, TICKET_TYPE_IDS } from "../config.js";
-import { panelRow, priceTableModal } from "../src/components.js";
+import { panelRows, priceTableModal } from "../src/components.js";
 import { boardEmbed, exchangeRecapEmbed, exchangeSimEmbed, guideEmbeds, panelEmbed, rateEmbed } from "../src/embeds.js";
 import {
     DEFAULT_EXCHANGE_FEE,
@@ -207,8 +207,8 @@ test("exchange displays show stock only, the simulator gives the amount", () => 
         const text = JSON.stringify(embed.toJSON().fields);
         assert.ok(!text.includes("€") && !text.includes("DH"), "no price on the exchange displays");
     }
-    const ids = panelRow("echange").toJSON().components.map((button) => button.custom_id);
-    assert.deepEqual(ids, ["panel:echange", "xchg:sim", "alert:start", "info:proc:echange", "info:guarantee"]);
+    const ids = panelRows("echange").map((row) => row.toJSON().components.map((button) => button.custom_id));
+    assert.deepEqual(ids, [["panel:echange", "xchg:sim", "alert:start"], ["info:proc:echange", "info:guarantee"]]);
 
     const [from, to] = DOFUS_SERVERS;
     withExchangePrices({ [from.code]: 0.38, [to.code]: 0.4 }, () => {

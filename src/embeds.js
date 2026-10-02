@@ -398,8 +398,11 @@ export function guideEmbeds() {
                 "5. Un **ticket privé** s'ouvre avec le résumé et le total estimé.",
                 "Un client ne peut avoir qu'**un seul ticket ouvert** à la fois.",
                 "",
-                "**🛡️ Boutons de confiance sur les panneaux**",
-                "• **🔔 Alerte stock** (achat, échange) — le client choisit des serveurs ; dès que `/stock set` remet du stock sur l'un d'eux, il reçoit un DM (une seule fois).",
+                "**🛡️ Boutons des panneaux**",
+                "• **🔔 Alerte stock** — DM (une fois) quand `/stock set` remet du stock sur un serveur choisi.",
+                "• **📈 Suivi prix** — DM quand un prix suivi bouge de 3 % ou plus.",
+                "• **💼 Faire une offre** — arrive dans 💼・offres ; Accepter ouvre le ticket au prix proposé.",
+                "• **🔒 Prix bloqué** 15 min pendant la commande, garanti 2 h dans le ticket.",
                 "• **📦 Procédure**, **🛡️ Garantie**, **💳 Méthodes** — réponses toutes prêtes, visibles seulement par le client.",
                 "• Les avis affichent la **référence du ticket** et le **staff** qui l'a pris en charge.",
                 "",
@@ -537,8 +540,9 @@ export function ticketIntroEmbed(ticket, user, type) {
         fields.push({ name: "💰 Quantité", value: formatMillions(ticket.millions), inline: true });
     }
     if (ticket.currency) {
-        const rate = effectiveRate(ticket.currency, ticket.rateKind, ticket.serverCode);
+        const rate = ticket.rate ?? effectiveRate(ticket.currency, ticket.rateKind, ticket.serverCode);
         const total = ticket.total;
+        const lockedUntil = ticket.priceLockedUntil ? Date.parse(ticket.priceLockedUntil) : null;
         const method =
             ticket.paymentCode && ticket.paymentCode !== "none"
                 ? `${paymentByCode(ticket.paymentCode).emoji} ${paymentByCode(ticket.paymentCode).label}`
@@ -552,7 +556,10 @@ export function ticketIntroEmbed(ticket, user, type) {
                 `Devise : **${currencyInfo(ticket.currency).code}**`,
                 `Taux : **${rate === null ? "à confirmer" : `${formatMoney(rate, ticket.currency)}/M`}**`,
                 `Total : **${total == null ? "à confirmer" : formatMoney(total, ticket.currency)}**`,
-            ].join("\n"),
+                lockedUntil ? `🔒 Prix garanti jusqu'à <t:${Math.floor(lockedUntil / 1000)}:t>` : null,
+            ]
+                .filter(Boolean)
+                .join("\n"),
             inline: true,
         });
     }

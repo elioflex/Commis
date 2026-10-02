@@ -1,7 +1,8 @@
 import { SETTINGS } from "../config.js";
-import { panelRow } from "./components.js";
+import { panelRows } from "./components.js";
 import { boardEmbed, guideEmbeds, panelEmbed } from "./embeds.js";
 import { findTextChannel } from "./guild-utils.js";
+import { checkPriceWatches } from "./price-watch.js";
 import { read, update } from "./store.js";
 
 /**
@@ -45,7 +46,7 @@ async function refreshPanels(client) {
             if (entry) console.warn(`[live-board] panneau ${typeId} introuvable — republie-le avec /panel`);
             continue;
         }
-        await message.edit({ embeds: [panelEmbed(typeId)], components: [panelRow(typeId)] });
+        await message.edit({ embeds: [panelEmbed(typeId)], components: panelRows(typeId) });
         edited += 1;
     }
     return edited;
@@ -93,6 +94,8 @@ export async function refreshMarketDisplaysNow(client) {
             console.error("[live-board] taux-du-jour :", error.message);
             return 0;
         });
+        // Price-watch DMs follow the same refresh as the displays (fire and forget).
+        void checkPriceWatches(client);
         return { panels, board };
     })();
 

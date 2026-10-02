@@ -2,17 +2,25 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { ANTI_SCAM_LINE, DOFUS_SERVERS, TICKET_TYPE_IDS } from "../config.js";
-import { alertSelectRow, panelRow } from "../src/components.js";
+import { alertSelectRow, panelRows } from "../src/components.js";
 import { guaranteeEmbed, panelEmbed, paymentMethodsEmbed, procedureEmbed, reviewEmbed } from "../src/embeds.js";
 import { alertsFor, isRestock, restockEmbed, setAlerts, subscribersFor } from "../src/stock-alerts.js";
 
-const ids = (typeId) => panelRow(typeId).toJSON().components.map((button) => button.custom_id);
+const ids = (typeId) => panelRows(typeId).map((row) => row.toJSON().components.map((button) => button.custom_id));
 
-test("market panels carry the trust buttons, 5 at most per row", () => {
-    assert.deepEqual(ids("achat"), ["panel:achat", "alert:start", "info:proc:achat", "info:guarantee", "info:pay"]);
-    assert.deepEqual(ids("vente"), ["panel:vente", "info:proc:vente", "info:guarantee", "info:pay"]);
-    for (const typeId of TICKET_TYPE_IDS) assert.ok(ids(typeId).length <= 5, typeId);
-    assert.deepEqual(ids("support"), ["panel:support"]);
+test("market panels: tools on row 1, trust buttons on row 2, 5 at most per row", () => {
+    assert.deepEqual(ids("achat"), [
+        ["panel:achat", "alert:start", "watch:start:buy", "offer:start:buy"],
+        ["info:proc:achat", "info:guarantee", "info:pay"],
+    ]);
+    assert.deepEqual(ids("vente"), [
+        ["panel:vente", "watch:start:sell", "offer:start:sell"],
+        ["info:proc:vente", "info:guarantee", "info:pay"],
+    ]);
+    for (const typeId of TICKET_TYPE_IDS) {
+        for (const row of ids(typeId)) assert.ok(row.length <= 5, typeId);
+    }
+    assert.deepEqual(ids("support"), [["panel:support"]]);
 });
 
 test("market panels show the anti-scam line, other panels don't", () => {

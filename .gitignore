@@ -4,4 +4,6 @@ data/tickets.json
 data/reviews.json
 data/panels.json
 data/alerts.json
+data/watches.json
+data/offers.json
 data/*.tmp

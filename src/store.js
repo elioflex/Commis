@@ -14,6 +14,8 @@ const DEFAULTS = {
     "reviews.json": { entries: [] },
     "panels.json": { posted: {} },
     "alerts.json": { users: {} },
+    "watches.json": { users: {} },
+    "offers.json": { nextId: 1, offers: {} },
 };
 
 const cache = new Map();

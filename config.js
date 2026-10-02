@@ -350,6 +350,7 @@ export const LAYOUT = [
         channels: [
             { name: "📘・guide-du-bot", topic: "📘 Comment fonctionne le bot et toutes ses commandes — tenu à jour automatiquement." },
             { name: "📦・commandes", topic: "Suivi des commandes en cours." },
+            { name: "💼・offres", topic: "Offres de prix des clients — accepter ou refuser." },
             { name: "💳・paiements", topic: "Preuves de paiement." },
             { name: "📝・détails-ventes", topic: "Détails des ventes." },
             { name: "⚙️・gestion", topic: "Gestion interne." },
