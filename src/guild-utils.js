@@ -67,6 +67,18 @@ export function staffOverwrites(guild) {
     return overwrites;
 }
 
+/** Overwrites for the price manager's channel: Manager role and the bot only, not the staff. */
+export function managerOverwrites(guild) {
+    const overwrites = [{ id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] }];
+    const manager = managerRole(guild);
+    if (manager) overwrites.push({ id: manager.id, allow: staffAllow() });
+    const me = guild.members?.me;
+    if (me) overwrites.push({ id: me.id, allow: staffAllow() });
+    const staff = staffRole(guild);
+    if (staff && staff.id !== manager?.id) overwrites.push({ id: staff.id, deny: [PermissionFlagsBits.ViewChannel] });
+    return overwrites;
+}
+
 export async function ensureCategory(guild, name, { staffOnly = false } = {}) {
     const existing = findCategory(guild, name);
     if (existing) return existing;

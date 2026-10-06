@@ -3,7 +3,7 @@ import { ChannelType } from "discord.js";
 import { LAYOUT, PAYMENT_METHODS, ROLES, SETTINGS, TICKET_STAGES } from "../config.js";
 import { panelRows } from "./components.js";
 import { panelEmbed } from "./embeds.js";
-import { ensureCategory, findTextChannel, sleep, staffOverwrites } from "./guild-utils.js";
+import { ensureCategory, findTextChannel, managerOverwrites, sleep, staffOverwrites } from "./guild-utils.js";
 import { update } from "./store.js";
 
 const normalize = (name) => name.trim().toLowerCase();
@@ -138,7 +138,11 @@ export async function setupGuild(
                     type: isVoice ? ChannelType.GuildVoice : ChannelType.GuildText,
                     parent: category?.id,
                     topic: isVoice ? undefined : definition.topic,
-                    permissionOverwrites: block.staffOnly ? staffOverwrites(guild) : undefined,
+                    permissionOverwrites: definition.managerOnly
+                        ? managerOverwrites(guild)
+                        : block.staffOnly
+                          ? staffOverwrites(guild)
+                          : undefined,
                     reason: "Setup marketplace",
                 })
                 .catch((error) => {

@@ -1,4 +1,5 @@
 import { SETTINGS } from "../config.js";
+import { refreshAdminPanel } from "./admin-panel.js";
 import { panelRows } from "./components.js";
 import { boardEmbed, guideEmbeds, panelEmbed } from "./embeds.js";
 import { findTextChannel } from "./guild-utils.js";
@@ -94,6 +95,7 @@ export async function refreshMarketDisplaysNow(client) {
             console.error("[live-board] taux-du-jour :", error.message);
             return 0;
         });
+        await refreshAdminPanel(client).catch((error) => console.error("[live-board] pilotage-prix :", error.message));
         // Price-watch DMs follow the same refresh as the displays (fire and forget).
         void checkPriceWatches(client);
         return { panels, board };

@@ -42,8 +42,17 @@ import {
     reviewEmbed,
     successEmbed,
 } from "./embeds.js";
+import {
+    adminModal,
+    parseNumber,
+    parseSide,
+    parseStockStatus,
+    priceLine,
+    refreshAdminPanelSoon,
+    resolveOneServer,
+} from "./admin-panel.js";
 import { isManager, isStaff, offersChannel } from "./guild-utils.js";
-import { refreshMarketDisplays } from "./live-board.js";
+import { refreshGuide, refreshMarketDisplays } from "./live-board.js";
 import {
     parseMillions,
     effectiveRate,
@@ -52,10 +61,18 @@ import {
     formatMillions,
     parsePriceTable,
     quote,
+    resolveServers,
     serverPriceSummary,
+    setExchangeFee,
+    setFeedEnabled,
+    setFeedFactors,
+    setServerAdjustments,
+    setStock,
     stockFor,
     setServerPrice,
+    feedEnabled,
 } from "./market.js";
+import { runPriceFeed } from "./price-feed.js";
 
 import {
     OFFER_KINDS,
@@ -70,7 +87,7 @@ import {
 } from "./offers.js";
 import { lockQuote, lockedRate, quoteLockLine, releaseQuote } from "./price-lock.js";
 import { WATCH_KINDS, setWatches, watchListLine, watchesFor } from "./price-watch.js";
-import { alertListLine, alertsFor, setAlerts } from "./stock-alerts.js";
+import { alertListLine, alertsFor, isRestock, notifyRestock, setAlerts, subscribersFor } from "./stock-alerts.js";
 import { update } from "./store.js";
 import { buildTranscript } from "./transcript.js";
 import {
@@ -157,6 +174,7 @@ async function handleButton(client, interaction) {
         setAlerts(interaction.user.id, interaction.guildId, []);
         return interaction.update(alertPanel(interaction.user.id));
     }
+    if (scope === "admin") return handleAdminButton(client, interaction, rest[0]);
     if (scope === "watch" && WATCH_KINDS.includes(rest[1])) {
         if (rest[0] === "start") return respond(interaction, watchPanel(interaction.user.id, rest[1]));
         if (rest[0] === "clear") {
@@ -177,6 +195,129 @@ async function handleButton(client, interaction) {
     }
     if (scope === "offer" && (rest[0] === "accept" || rest[0] === "refuse")) {
         return decideOfferButton(interaction, rest[0], rest[1]);
+    }
+    return undefined;
+}
+
+/* ───────────────────────── 🎛️ pilotage-prix ───────────────────────── */
+
+async function needManager(interaction) {
+    if (isManager(interaction.member)) return true;
+    await respond(interaction, {
+        embeds: [errorEmbed("Réservé au gestionnaire des prix.", "🔒 Accès refusé")],
+    });
+    return false;
+}
+
+const ADMIN_MODALS = ["factors", "fee", "adjust", "price", "stock"];
+
+async function handleAdminButton(client, interaction, action) {
+    if (!(await needManager(interaction))) return undefined;
+    if (ADMIN_MODALS.includes(action)) return interaction.showModal(adminModal(action));
+    if (action === "toggle") {
+        const enabled = setFeedEnabled(!feedEnabled());
+        refreshMarketDisplays(client);
+        return respond(interaction, {
+            embeds: [
+                successEmbed(
+                    enabled ? "Prix web réactivés." : "Prix web en pause : retour aux taux de base.",
+                    enabled ? "▶️ Prix web" : "⏸️ Prix web",
+                ),
+            ],
+        });
+    }
+    if (action === "feed") {
+        await interaction.deferReply({ ephemeral: true });
+        const result = await runPriceFeed({ client });
+        refreshMarketDisplays(client);
+        return interaction.editReply({
+            embeds: [
+                result.ok
+                    ? successEmbed(
+                          `${result.changed} prix modifié(s)${result.held.length ? `, ${result.held.length} saut(s) en attente de confirmation` : ""}.`,
+                          "🔄 Relevé terminé",
+                      )
+                    : errorEmbed("Relevé impossible : les derniers prix connus sont conservés.", "⚠️ Relevé"),
+            ],
+        });
+    }
+    return undefined;
+}
+
+async function submitAdminModal(client, interaction, kind) {
+    if (!(await needManager(interaction))) return undefined;
+    const value = (id) => interaction.fields.getTextInputValue(id);
+    const fail = (message) => respond(interaction, { embeds: [errorEmbed(`${message}\nRien n'a été modifié.`)] });
+    const done = (lines, title) => {
+        refreshMarketDisplays(client);
+        return respond(interaction, { embeds: [successEmbed([lines].flat().join("\n"), title)] });
+    };
+
+    if (kind === "factors") {
+        const buy = parseNumber(value("buy"));
+        const sell = parseNumber(value("sell"));
+        if (!(buy >= 50 && buy <= 150) || !(sell >= 50 && sell <= 150)) return fail("Entre un pourcentage entre 50 et 150.");
+        setFeedFactors({ buy: buy / 100, sell: sell / 100 });
+        void refreshGuide(client);
+        return done(`Vente : **${buy} %** du moins cher · rachat : **${sell} %** du meilleur.`, "🎯 Pourcentages enregistrés");
+    }
+    if (kind === "fee") {
+        const fee = parseNumber(value("fee"));
+        if (fee === null || fee < 0 || fee > 50) return fail("Commission entre 0 et 50 %.");
+        const applied = setExchangeFee(fee);
+        void refreshGuide(client);
+        return done(`Commission sur les échanges : **${applied.toLocaleString("fr-FR")} %**`, "💱 Commission enregistrée");
+    }
+    if (kind === "adjust") {
+        const { codes, unknown } = resolveServers(value("servers"));
+        const kinds = parseSide(value("side"));
+        const percent = parseNumber(value("percent"));
+        if (unknown.length || !codes.length) return fail(`Serveur(s) inconnu(s) : ${unknown.join(", ") || "aucun"}.`);
+        if (!kinds) return fail("Sens : achat, vente ou les deux.");
+        if (percent === null || Math.abs(percent) > 50) return fail("Ajustement entre -50 et +50 %.");
+        const applied = setServerAdjustments(codes, kinds, percent);
+        const lines = codes.flatMap((code) => kinds.map((k) => priceLine(code, k)));
+        return done(
+            [
+                applied === 0 ? `Ajustement retiré sur ${codes.length} serveur(s).` : `Ajustement **${applied > 0 ? "+" : ""}${applied} %** sur ${codes.length} serveur(s).`,
+                ...(lines.length > 30 ? [...lines.slice(0, 30), `… et ${lines.length - 30} autre(s)`] : lines),
+            ],
+            "🎚️ Prix ajustés",
+        );
+    }
+    if (kind === "price") {
+        const code = resolveOneServer(value("server"));
+        const kinds = parseSide(value("side"), { allowBoth: false });
+        const price = parseNumber(value("price"));
+        if (!code) return fail("Indique un seul serveur connu.");
+        if (!kinds) return fail("Sens : achat ou vente.");
+        if (price === null || price < 0 || price > 1000) return fail("Prix invalide.");
+        setServerPrice(code, kinds[0], price);
+        return done(
+            [price === 0 ? "Prix manuel retiré : le prix web reprend la main." : "Prix manuel enregistré (prioritaire sur le web).", priceLine(code, kinds[0])],
+            "📌 Prix manuel",
+        );
+    }
+    if (kind === "stock") {
+        const code = resolveOneServer(value("server"));
+        const millions = parseNumber(value("millions"));
+        if (!code) return fail("Indique un seul serveur connu.");
+        if (millions === null || millions < 0) return fail("Quantité invalide.");
+        const status = parseStockStatus(value("status"), millions);
+        if (!status) return fail("Statut : dispo, limite ou sur commande.");
+        const before = stockFor(code);
+        setStock(code, millions, status);
+        const after = stockFor(code);
+        const waiting = isRestock(before, after) ? subscribersFor(code).length : 0;
+        await done(
+            [
+                `**${serverLabel(serverByCode(code)) || code}** → ${formatMillions(millions)} (${status})`,
+                waiting ? `🔔 ${waiting} client(s) en alerte, message privé en cours d'envoi.` : null,
+            ].filter(Boolean),
+            "📦 Stock mis à jour",
+        );
+        if (waiting) await notifyRestock(client, code, after);
+        return undefined;
     }
     return undefined;
 }
@@ -221,6 +362,7 @@ async function decideOfferButton(interaction, action, offerId) {
         return respond(interaction, { embeds: [infoEmbed("Cette offre a déjà été traitée.", "💼 Offre")] });
     }
     await interaction.update({ embeds: [offerStaffEmbed(offer)], components: [offerDecisionRow(offer.id, { disabled: true })] });
+    refreshAdminPanelSoon(interaction.client);
 
     if (action === "refuse") {
         const reached = await dm(interaction.client, offer.userId, { embeds: [offerRefusedEmbed(offer)] });
@@ -715,6 +857,7 @@ async function handleModal(client, interaction) {
 
     if (scope === "modal" && rest[0] === "review") return submitReview(client, interaction, rest[1]);
     if (scope === "offer" && rest[0] === "modal") return submitOffer(interaction, rest[1], rest[2]);
+    if (scope === "admin" && rest[0] === "modal") return submitAdminModal(client, interaction, rest[1]);
 
     return undefined;
 }
@@ -748,6 +891,7 @@ async function submitOffer(interaction, kind, serverCode) {
         personnage: interaction.fields.getTextInputValue("personnage").trim(),
     });
     await channel.send({ embeds: [offerStaffEmbed(offer)], components: [offerDecisionRow(offer.id)] });
+    refreshAdminPanelSoon(interaction.client);
     return respond(interaction, { embeds: [offerSentEmbed(offer)] });
 }
 

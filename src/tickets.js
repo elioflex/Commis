@@ -4,6 +4,7 @@ import { BRAND, SETTINGS, TICKET_STAGES, TICKET_TYPES, serverByCode } from "../c
 import { infoEmbed, reviewRequestEmbed, ticketClosedEmbed, ticketIntroEmbed } from "./embeds.js";
 import { ensureCategory, logChannel, staffRole, transcriptChannel } from "./guild-utils.js";
 import { quote, effectiveRate } from "./market.js";
+import { refreshAdminPanelSoon } from "./admin-panel.js";
 import { TICKET_LOCK_HOURS } from "./price-lock.js";
 import { read, update } from "./store.js";
 import { reviewButtonRow, ticketActionRow } from "./components.js";
@@ -200,6 +201,7 @@ export async function openTicket({ guild, member, typeId, payload = {} }) {
         }).catch(() => {});
     }
 
+    refreshAdminPanelSoon(guild.client);
     return { ticket, channel };
 }
 
@@ -351,6 +353,7 @@ export async function closeTicket({ channel, ticket, closedBy, reasonCode, reaso
         data.closed = [ticket, ...(data.closed ?? [])].slice(0, 2000);
         return ticket;
     });
+    refreshAdminPanelSoon(channel.client);
 
     await channel
         .send({ embeds: [ticketClosedEmbed({ user: `<@${ticket.userId}>`, closedBy, reason })] })

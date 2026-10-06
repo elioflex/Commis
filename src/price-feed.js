@@ -1,4 +1,5 @@
 import { DOFUS_SERVERS, SETTINGS } from "../config.js";
+import { refreshAdminPanelSoon } from "./admin-panel.js";
 import { refreshMarketDisplays } from "./live-board.js";
 import { read, update } from "./store.js";
 
@@ -307,6 +308,7 @@ export async function runPriceFeed({
                 return true;
             });
             console.warn(`[price-feed] aucune source disponible — ${lastError}`);
+            if (client) refreshAdminPanelSoon(client);
             return { ok: false, changed: 0, errors, held: [] };
         }
 
@@ -341,6 +343,7 @@ export async function runPriceFeed({
         );
 
         if (changed && client) refreshMarketDisplays(client);
+        else if (client) refreshAdminPanelSoon(client);
         return { ok: true, changed, errors, held };
     })();
 

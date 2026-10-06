@@ -348,6 +348,11 @@ export const LAYOUT = [
         name: "🔒 | Staff",
         staffOnly: true,
         channels: [
+            {
+                name: "🎛️・pilotage-prix",
+                topic: "🎛️ Pilotage des prix — visible uniquement par le gestionnaire des prix (rôle Manager).",
+                managerOnly: true,
+            },
             { name: "📘・guide-du-bot", topic: "📘 Comment fonctionne le bot et toutes ses commandes — tenu à jour automatiquement." },
             { name: "📦・commandes", topic: "Suivi des commandes en cours." },
             { name: "💼・offres", topic: "Offres de prix des clients — accepter ou refuser." },

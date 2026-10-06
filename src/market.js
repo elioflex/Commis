@@ -1,4 +1,4 @@
-import { COMPETITORS, CURRENCIES, currencyInfo, DOFUS_SERVERS, GAMES, serverByCode, serverByName, serverLabel } from "../config.js";
+import { CURRENCIES, currencyInfo, DOFUS_SERVERS, GAMES, serverByCode, serverByName, serverLabel } from "../config.js";
 import { read, setPath, deletePath } from "./store.js";
 
 export const STOCK_STATUS = {
@@ -447,22 +447,6 @@ export function parseMillions(input) {
     return value;
 }
 
-const formatGap = (gap) => gap.toLocaleString("fr-FR", { maximumFractionDigits: gap < 10 ? 1 : 0 });
-
-/**
- * "🏆 -4 % vs KamasV (0,77 €) · -8 % vs 1Kamas (0,80 €)" under a server on the
- * buy side, "🏆 +6 % vs LesKamas (0,52 €)" on the sell side. Null when we don't
- * beat anyone there: we never show a comparison that makes us look worse.
- */
-export function edgeLine(serverCode, kind) {
-    const edges = competitorEdge(serverCode, kind);
-    if (!edges.length) return null;
-    const sign = kind === "sell" ? "+" : "-";
-    const cells = edges.map(
-        ({ site, price, gap }) => `${sign}${formatGap(gap)} % vs ${COMPETITORS[site] ?? site} (${formatMoney(price, "EUR")})`,
-    );
-    return `  🏆 ${cells.join(" · ")}`;
-}
 
 /**
  * Two lines per Dofus server: name (+ stock for buy/exchange), then its price
@@ -496,10 +480,8 @@ export function serverRateLines(kind) {
     });
 
     return rows.map(({ code, name, summary, stock }) => {
-        const edge = edgeLine(code, kind);
-        const tail = edge ? `\n${edge}` : "";
-        if (!showStock) return `**${name}**\n└ ${summary}${tail}`;
-        return `**${name}** · ${stockBadge(stock)}\n└ ${summary}${tail}`;
+        if (!showStock) return `**${name}**\n└ ${summary}`;
+        return `**${name}** · ${stockBadge(stock)}\n└ ${summary}`;
     });
 }
 

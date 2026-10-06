@@ -69,30 +69,6 @@ export const infoEmbed = (description, title) =>
 
 const isMarketType = (typeId) => typeId === "achat" || typeId === "vente" || typeId === "echange";
 
-const siteList = (sites) => {
-    const names = sites.map((site) => COMPETITORS[site] ?? site);
-    return names.length > 1 ? `${names.slice(0, -1).join(", ")} et ${names.at(-1)}` : names[0];
-};
-
-/**
- * "🏆 Moins cher que KamasV et 1Kamas sur 12 serveurs" — the headline of the
- * achat / vente displays. Null when we beat nobody (or the feed is stale).
- */
-function comparisonLine(kind) {
-    if (kind === "exchange") return null;
-    const sites = new Set();
-    let servers = 0;
-    for (const server of DOFUS_SERVERS) {
-        const edges = competitorEdge(server.code, kind);
-        if (!edges.length) continue;
-        servers += 1;
-        for (const { site } of edges) sites.add(site);
-    }
-    if (!servers) return null;
-    const what = kind === "sell" ? "On te paie plus que" : "Moins cher que";
-    return `🏆 **${what} ${siteList([...sites])}** sur ${servers} serveur${servers > 1 ? "s" : ""} — prix relevés en direct sur leurs sites.`;
-}
-
 /** The big embed that sits behind each market panel button. */
 export function panelEmbed(typeId) {
     const type = TICKET_TYPES[typeId];
@@ -101,7 +77,6 @@ export function panelEmbed(typeId) {
         .setDescription(
             [
                 type.blurb,
-                isMarketType(typeId) ? comparisonLine(kindForType(typeId)) : null,
                 typeId === "echange" ? exchangeRuleLine() : null,
                 "",
                 `Clique sur le bouton ci-dessous 👇`,
@@ -260,7 +235,6 @@ const BOARD_TITLES = {
 /** One of the three live embeds kept up to date in 📈・taux-du-jour. */
 export function boardEmbed(kind) {
     const lines = [
-        comparisonLine(kind),
         pricesUpdatedLine(),
         kind === "exchange" ? exchangeRuleLine() : null,
     ].filter(
@@ -438,10 +412,11 @@ export function guideEmbeds() {
                 "Le client choisit le serveur où il donne, celui où il reçoit, puis la quantité donnée.",
                 `Reçu = donné × (prix de vente source ÷ prix de vente destination) × (1 − **${exchangeFee().toLocaleString("fr-FR")} %** de commission).`,
                 "",
-                "**🏆 Comparaison affichée aux clients**",
-                "Sous chaque serveur, on montre seulement les concurrents qu'on bat réellement " +
-                    "(« -5 % vs KamasV »). Si le dernier relevé a plus de 6 h, la comparaison disparaît.",
-                "Si un site est en panne ou nous bloque, les derniers prix connus restent affichés " +
+                "**🎛️ Salon pilotage-prix** — réservé au rôle Manager : tableau de bord en direct et boutons pour régler les prix et le stock.",
+                "",
+                "**🙈 Côté clients**",
+                "Aucune comparaison avec les concurrents n'est affichée : les clients ne voient que nos prix.",
+                "Si un site est en panne ou nous bloque, les derniers prix connus restent utilisés " +
                     "et l'erreur apparaît dans `/rate auto`.",
             ].join("\n"),
         );

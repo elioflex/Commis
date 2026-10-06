@@ -220,21 +220,21 @@ export const commandData = [
         .addSubcommand((sub) =>
             sub
                 .setName("auto")
-                .setDescription("Prix automatiques relevés sur le web : état et réglages (staff)")
+                .setDescription("Prix automatiques : état et réglages (staff)")
                 .addBooleanOption((option) =>
                     option.setName("actif").setDescription("Utiliser les prix web (non = retour aux taux de base)"),
                 )
                 .addIntegerOption((option) =>
                     option
                         .setName("achat")
-                        .setDescription("Notre prix de vente au client, en % du prix des concurrents (100 = pareil)")
+                        .setDescription("Prix de vente, en % du prix de référence (100 = pareil)")
                         .setMinValue(10)
                         .setMaxValue(300),
                 )
                 .addIntegerOption((option) =>
                     option
                         .setName("vente")
-                        .setDescription("Ce qu'on paie au vendeur, en % du prix de rachat des concurrents (100 = pareil)")
+                        .setDescription("Prix de rachat, en % du prix de référence (100 = pareil)")
                         .setMinValue(10)
                         .setMaxValue(300),
                 )

@@ -4,7 +4,6 @@ import test from "node:test";
 import {
     autoPrice,
     competitorEdge,
-    edgeLine,
     effectiveRate,
     eurPrice,
     priceSource,
@@ -23,6 +22,7 @@ import {
     parseLeskamas,
     runPriceFeed,
 } from "../src/price-feed.js";
+import { boardEmbed, panelEmbed } from "../src/embeds.js";
 import { read, update } from "../src/store.js";
 
 const eur = (cents) => ({ price: String(cents), currency_code: "EUR", currency_minor_unit: 2 });
@@ -242,27 +242,23 @@ function seedFeed(fetchedAt = new Date().toISOString()) {
     });
 }
 
-test("displays show only the competitors we beat, and only while prices are fresh", async () => {
+test("competitors stay internal: nothing about them on customer displays", async () => {
     await withMarket(async () => {
         seedFeed();
         assert.deepEqual(competitorEdge("drac", "buy"), [
             { site: "1kamas", price: 0.8, gap: 7.5 },
             { site: "kamasv", price: 0.77, gap: 3.9 },
         ]);
-        assert.equal(edgeLine("drac", "buy"), "  🏆 -7,5 % vs 1Kamas (0,80 €) · -3,9 % vs KamasV (0,77 €)");
-        assert.equal(edgeLine("drac", "sell"), "  🏆 +3,8 % vs LesKamas (0,52 €)");
-        assert.equal(edgeLine("drac", "exchange"), null);
 
-        // Stale competitor prices (feed down for hours) are never shown publicly.
-        seedFeed(new Date(Date.now() - 7 * 60 * 60 * 1000).toISOString());
-        assert.equal(edgeLine("drac", "buy"), null);
-
-        // Every panel stays inside Discord's limits with the comparison lines.
-        seedFeed();
+        // Customers never see a competitor's name or price.
         for (const kind of ["buy", "sell", "exchange"]) {
             const fields = serverRateFields(kind);
             assert.ok(fields.every((field) => field.value.length <= 1024));
-            assert.ok(fields.reduce((sum, field) => sum + field.value.length + field.name.length, 0) < 5000);
+            const text = JSON.stringify(fields);
+            assert.ok(!/🏆| vs |1Kamas|KamasV|LesKamas/.test(text), text);
+        }
+        for (const embed of [panelEmbed("achat"), panelEmbed("vente"), boardEmbed("buy"), boardEmbed("sell")]) {
+            assert.ok(!/🏆|1Kamas|KamasV|LesKamas|Moins cher que/.test(JSON.stringify(embed.toJSON())));
         }
     });
 });
@@ -273,7 +269,6 @@ test("what we pay never eats the margin, unless staff pinned it by hand", async 
         // Mikhal: buy 0.67 × 97 % = 0.64; paying 0.66 × 103 % = 0.68 would lose money.
         assert.equal(eurPrice("mikhal", "buy").eur, 0.64);
         assert.deepEqual(eurPrice("mikhal", "sell"), { eur: 0.6, manual: false, capped: true });
-        assert.equal(edgeLine("mikhal", "sell"), null, "no 'better than LesKamas' claim when capped below it");
 
         setServerPrice("mikhal", "sell", 0.7);
         assert.deepEqual(eurPrice("mikhal", "sell"), { eur: 0.7, manual: true, capped: false });
