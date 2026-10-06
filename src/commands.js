@@ -49,6 +49,7 @@ import {
 } from "./market.js";
 import { checkGuild, formatChecks } from "./preflight.js";
 import { priceFeedRunning, runPriceFeed } from "./price-feed.js";
+import { logAdminChange, refreshAdminPanel } from "./admin-panel.js";
 import { setupGuild } from "./setup.js";
 import { isRestock, notifyRestock, subscribersFor } from "./stock-alerts.js";
 import { update } from "./store.js";
@@ -448,6 +449,7 @@ export async function runCommand(client, interaction) {
 
         const report = await setupGuild(interaction.guild, { skipRoles: onlyChannels, withPaymentRoles });
         void refreshGuide(client);
+        await refreshAdminPanel(client).catch((error) => console.error("[setup] pilotage-prix :", error.message));
 
         return interaction.editReply({
             embeds: [
@@ -498,6 +500,10 @@ export async function runCommand(client, interaction) {
             }
 
             const applied = setServerAdjustments(codes, kinds, interaction.options.getNumber("pourcentage", true));
+            logAdminChange(
+                interaction.user.id,
+                `🎚️ ${codes.length > 3 ? `${codes.length} serveurs` : codes.join(", ")} ${kinds.map((k) => (k === "buy" ? "vente" : "rachat")).join("+")} ${applied > 0 ? "+" : ""}${applied} %`,
+            );
             refreshMarketDisplays(client);
 
             const lines = codes.map((code) => {
@@ -533,6 +539,7 @@ export async function runCommand(client, interaction) {
 
         if (sub === "commission") {
             const fee = setExchangeFee(interaction.options.getNumber("pourcentage", true));
+            logAdminChange(interaction.user.id, `💱 Commission échange ${fee.toLocaleString("fr-FR")} %`);
             refreshMarketDisplays(client);
             void refreshGuide(client);
             const [from, to] = DOFUS_SERVERS;
@@ -567,6 +574,7 @@ export async function runCommand(client, interaction) {
             const enabled = interaction.options.getBoolean("actif");
             if (enabled !== null) {
                 setFeedEnabled(enabled);
+                logAdminChange(interaction.user.id, enabled ? "▶️ Prix web réactivés" : "⏸️ Prix web en pause");
                 notes.push(enabled ? "✅ Prix web activés." : "⏸️ Prix web en pause — retour aux taux de base.");
             }
 
@@ -577,6 +585,10 @@ export async function runCommand(client, interaction) {
             }
             if (Object.keys(factors).length) {
                 setFeedFactors(factors);
+                logAdminChange(
+                    interaction.user.id,
+                    `🎯 ${Object.entries(factors).map(([k, v]) => `${{ buy: "vente", sell: "rachat", exchange: "échange" }[k]} ${Math.round(v * 100)} %`).join(" · ")}`,
+                );
                 notes.push("✅ Pourcentages enregistrés.");
             }
 
@@ -605,6 +617,7 @@ export async function runCommand(client, interaction) {
             const kind = interaction.options.getString("sens", true);
             const price = interaction.options.getNumber("prix", true);
             const applied = setServerPrice(serverCode, kind, price);
+            logAdminChange(interaction.user.id, `📌 ${serverCode} ${kind === "buy" ? "vente" : "rachat"} ${price === 0 ? "rendu au web" : `${price.toLocaleString("fr-FR")} €/M`}`);
             refreshMarketDisplays(client);
             const name = serverLabel(serverByCode(serverCode)) || serverCode;
 
@@ -675,6 +688,7 @@ export async function runCommand(client, interaction) {
         const status = statusOption ?? (millions > 100 ? "open" : millions > 0 ? "low" : "full");
         const before = stockFor(serverCode);
         setStock(serverCode, millions, status);
+        logAdminChange(interaction.user.id, `📦 ${serverCode} ${formatMillions(millions)} (${status})`);
         refreshMarketDisplays(client);
 
         const after = stockFor(serverCode);

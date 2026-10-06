@@ -47,6 +47,7 @@ import {
     parseNumber,
     parseSide,
     parseStockStatus,
+    logAdminChange,
     priceLine,
     refreshAdminPanelSoon,
     resolveOneServer,
@@ -216,6 +217,7 @@ async function handleAdminButton(client, interaction, action) {
     if (ADMIN_MODALS.includes(action)) return interaction.showModal(adminModal(action));
     if (action === "toggle") {
         const enabled = setFeedEnabled(!feedEnabled());
+        logAdminChange(interaction.user.id, enabled ? "▶️ Prix web réactivés" : "⏸️ Prix web en pause");
         refreshMarketDisplays(client);
         return respond(interaction, {
             embeds: [
@@ -248,7 +250,8 @@ async function submitAdminModal(client, interaction, kind) {
     if (!(await needManager(interaction))) return undefined;
     const value = (id) => interaction.fields.getTextInputValue(id);
     const fail = (message) => respond(interaction, { embeds: [errorEmbed(`${message}\nRien n'a été modifié.`)] });
-    const done = (lines, title) => {
+    const done = (lines, title, change) => {
+        logAdminChange(interaction.user.id, change ?? title);
         refreshMarketDisplays(client);
         return respond(interaction, { embeds: [successEmbed([lines].flat().join("\n"), title)] });
     };
@@ -259,14 +262,14 @@ async function submitAdminModal(client, interaction, kind) {
         if (!(buy >= 50 && buy <= 150) || !(sell >= 50 && sell <= 150)) return fail("Entre un pourcentage entre 50 et 150.");
         setFeedFactors({ buy: buy / 100, sell: sell / 100 });
         void refreshGuide(client);
-        return done(`Vente : **${buy} %** du moins cher · rachat : **${sell} %** du meilleur.`, "🎯 Pourcentages enregistrés");
+        return done(`Vente : **${buy} %** du moins cher · rachat : **${sell} %** du meilleur.`, "🎯 Pourcentages enregistrés", `🎯 Vente ${buy} % · rachat ${sell} %`);
     }
     if (kind === "fee") {
         const fee = parseNumber(value("fee"));
         if (fee === null || fee < 0 || fee > 50) return fail("Commission entre 0 et 50 %.");
         const applied = setExchangeFee(fee);
         void refreshGuide(client);
-        return done(`Commission sur les échanges : **${applied.toLocaleString("fr-FR")} %**`, "💱 Commission enregistrée");
+        return done(`Commission sur les échanges : **${applied.toLocaleString("fr-FR")} %**`, "💱 Commission enregistrée", `💱 Commission échange ${applied.toLocaleString("fr-FR")} %`);
     }
     if (kind === "adjust") {
         const { codes, unknown } = resolveServers(value("servers"));
@@ -283,6 +286,7 @@ async function submitAdminModal(client, interaction, kind) {
                 ...(lines.length > 30 ? [...lines.slice(0, 30), `… et ${lines.length - 30} autre(s)`] : lines),
             ],
             "🎚️ Prix ajustés",
+            `🎚️ ${codes.length > 3 ? `${codes.length} serveurs` : codes.join(", ")} ${kinds.map((k) => (k === "buy" ? "vente" : "rachat")).join("+")} ${applied > 0 ? "+" : ""}${applied} %`,
         );
     }
     if (kind === "price") {
@@ -296,6 +300,7 @@ async function submitAdminModal(client, interaction, kind) {
         return done(
             [price === 0 ? "Prix manuel retiré : le prix web reprend la main." : "Prix manuel enregistré (prioritaire sur le web).", priceLine(code, kinds[0])],
             "📌 Prix manuel",
+            `📌 ${code} ${kinds[0] === "buy" ? "vente" : "rachat"} ${price === 0 ? "rendu au web" : `${price.toLocaleString("fr-FR")} €/M`}`,
         );
     }
     if (kind === "stock") {
@@ -315,6 +320,7 @@ async function submitAdminModal(client, interaction, kind) {
                 waiting ? `🔔 ${waiting} client(s) en alerte, message privé en cours d'envoi.` : null,
             ].filter(Boolean),
             "📦 Stock mis à jour",
+            `📦 ${code} ${formatMillions(millions)} (${status})`,
         );
         if (waiting) await notifyRestock(client, code, after);
         return undefined;

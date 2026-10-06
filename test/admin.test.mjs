@@ -6,7 +6,9 @@ import {
     ADMIN_CHANNEL,
     adminActivity,
     adminModal,
+    adminLog,
     adminPayload,
+    logAdminChange,
     adminRows,
     parseNumber,
     parseSide,
@@ -86,4 +88,24 @@ test("admin inputs are parsed forgivingly", () => {
     assert.equal(parseStockStatus("n'importe", 5), null);
     assert.equal(resolveOneServer("drac"), "drac");
     assert.equal(resolveOneServer("tous"), null);
+});
+
+test("dashboard is one recap message: sale, buyback, exchange and the latest changes", () => {
+    const restore = seedFullFeed();
+    try {
+        logAdminChange("123", "📌 drac vente 1,40 €/M");
+        const payload = adminPayload("g1", { running: true });
+        assert.equal(payload.embeds.length, 1);
+        const fields = payload.embeds[0].toJSON().fields.map((field) => `${field.name}\n${field.value}`).join("\n");
+        assert.match(fields, /🛒 Prix de vente/);
+        assert.match(fields, /💸 Prix de rachat/);
+        assert.match(fields, /♻️ Échange[\s\S]*Commission/);
+        assert.match(fields, /KamasV 1,23/);
+        assert.match(fields, /<@123> — 📌 drac vente 1,40 €\/M/);
+        for (let i = 0; i < 10; i++) logAdminChange("1", `change ${i}`);
+        assert.equal(adminLog().length, 6);
+        assert.equal(adminLog()[0].text, "change 9");
+    } finally {
+        restore();
+    }
 });

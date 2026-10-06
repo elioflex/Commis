@@ -123,6 +123,13 @@ export async function setupGuild(
         for (const definition of block.channels) {
             if (channelExists(guild, definition.name)) {
                 report.channelsSkipped.push(definition.name);
+                // A manager-only room created by hand inherits the staff access: lock it again.
+                const existing = definition.managerOnly && !dryRun ? findTextChannel(guild, definition.name) : null;
+                if (existing) {
+                    await existing.permissionOverwrites
+                        .set(managerOverwrites(guild), "Salon réservé au Manager")
+                        .catch((error) => console.error(`[setup] ${definition.name}:`, error.message));
+                }
                 continue;
             }
             if (dryRun) {

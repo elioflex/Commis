@@ -7,18 +7,23 @@ import {
     TextInputStyle,
 } from "discord.js";
 
-import { BRAND, SETTINGS, serverByCode, serverLabel } from "../config.js";
-import { baseEmbed, feedStatusEmbed } from "./embeds.js";
+import { BRAND, COMPETITORS, DOFUS_SERVERS, SETTINGS, serverByCode, serverLabel } from "../config.js";
+import { baseEmbed } from "./embeds.js";
 import { findTextChannel } from "./guild-utils.js";
 import {
+    competitorEdge,
+    competitorPrices,
     eurPrice,
     exchangeFee,
+    exchangeQuote,
     feedEnabled,
     feedFactors,
     feedState,
     formatMillions,
     formatMoney,
     resolveServers,
+    serverAdjustment,
+    stockFor,
     stockSummary,
 } from "./market.js";
 import { priceFeedRunning } from "./price-feed.js";
@@ -62,57 +67,125 @@ export function adminActivity(guildId) {
     };
 }
 
-export function adminOverviewEmbed(guildId) {
+/* ───────────── change log ───────────── */
+
+const LOG_SIZE = 6;
+
+/** Remember a price/stock change made by a manager, shown at the bottom of the dashboard. */
+export function logAdminChange(userId, text) {
+    update("market.json", (data) => {
+        data.adminLog = [{ at: new Date().toISOString(), userId: userId ?? null, text: String(text).slice(0, 140) }, ...(data.adminLog ?? [])].slice(0, LOG_SIZE);
+        return true;
+    });
+}
+
+export const adminLog = () => read("market.json").adminLog ?? [];
+
+/* ───────────── dashboard ───────────── */
+
+const eur = (value) => formatMoney(value, "EUR");
+const short = (value) => (typeof value === "number" ? value.toLocaleString("fr-FR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—");
+
+/** "**Draconiros** 1,55 € ✅ · KamasV 1,60 · 1Kamas 1,62 🎚️-2 %": our price, the shops, our tweaks. */
+export function adminPriceLine(server, kind) {
+    const price = eurPrice(server.code, kind);
+    const shops = Object.entries(competitorPrices(server.code, kind));
+    const beaten = competitorEdge(server.code, kind).length;
+    const verdict = !price || !shops.length ? "" : beaten === shops.length ? " ✅" : beaten ? " ➖" : " ❌";
+    const adjust = serverAdjustment(server.code, kind);
+    return [
+        `**${serverLabel(server)}** ${price ? eur(price.eur) : "à confirmer"}${verdict}`,
+        shops.length ? ` · ${shops.map(([site, value]) => `${COMPETITORS[site] ?? site} ${short(value)}`).join(" · ")}` : "",
+        adjust ? ` 🎚️${adjust > 0 ? "+" : ""}${adjust} %` : "",
+        price?.manual ? " 📌" : "",
+        price?.capped ? " 🛡️" : "",
+    ].join("");
+}
+
+/** Split lines into embed fields of at most 1024 characters. */
+function chunkFields(name, lines) {
+    const chunks = [];
+    let chunk = "";
+    for (const line of lines) {
+        if (chunk && chunk.length + line.length + 1 > 1024) {
+            chunks.push(chunk);
+            chunk = "";
+        }
+        chunk = chunk ? `${chunk}\n${line}` : line;
+    }
+    if (chunk) chunks.push(chunk);
+    return chunks.map((value, index) => ({
+        name: chunks.length > 1 ? `${name} (${index + 1}/${chunks.length})` : name,
+        value,
+        inline: false,
+    }));
+}
+
+function exchangeLines() {
+    const lines = [
+        `Commission : **${exchangeFee().toLocaleString("fr-FR")} %** · valeur des kamas = notre prix de vente sur chaque serveur`,
+    ];
+    const priced = DOFUS_SERVERS.filter((server) => server.game && eurPrice(server.code, "buy"))
+        .sort((a, b) => stockFor(b.code).millions - stockFor(a.code).millions)
+        .slice(0, 3);
+    for (const [from, to] of [[priced[0], priced[1]], [priced[1], priced[2]]]) {
+        const quote = from && to ? exchangeQuote(from.code, to.code, 100) : null;
+        if (quote) lines.push(`Ex. 100 M ${serverLabel(from)} → **${formatMillions(quote.received)}** ${serverLabel(to)}`);
+    }
+    return lines.join("\n");
+}
+
+export function adminOverviewEmbed(guildId, { running = true } = {}) {
     const feed = feedState();
     const factors = feedFactors();
     const stock = stockSummary();
     const activity = adminActivity(guildId);
-    const types = Object.entries(activity.byType)
-        .map(([type, count]) => `${type} ${count}`)
-        .join(" · ");
+    const servers = DOFUS_SERVERS.filter((server) => server.game);
+    const log = adminLog();
 
-    return baseEmbed({ color: BRAND.colors.brand })
+    return baseEmbed({ color: feedEnabled() ? BRAND.colors.success : BRAND.colors.neutral })
         .setTitle("🎛️ Pilotage des prix")
         .setDescription(
             [
-                `Prix web : **${feedEnabled() ? "actifs" : "en pause"}** · dernier relevé ${relative(feed.fetchedAt)}`,
+                `Prix web : **${feedEnabled() ? "actifs" : "en pause"}** · dernier relevé ${relative(feed.fetchedAt)}` +
+                    (running ? "" : " · _relevé automatique coupé (PRICE_FEED=off)_"),
+                `🛒 Vente : **${percent(factors.buy)}** du concurrent le moins cher · 💸 Rachat : **${percent(factors.sell)}** du meilleur rachat`,
                 feed.lastError ? `⚠️ ${feed.lastError.slice(0, 200)}` : null,
-                `Mis à jour ${relative(new Date().toISOString())}`,
+                "_✅ meilleur que tous · ➖ que certains · ❌ que personne · 🎚️ ajustement · 📌 prix manuel · 🛡️ plafonné (marge)_",
             ]
                 .filter(Boolean)
                 .join("\n"),
         )
         .addFields(
-            {
-                name: "🎯 Réglages",
-                value: [
-                    `Vente : **${percent(factors.buy)}** du moins cher`,
-                    `Rachat : **${percent(factors.sell)}** du meilleur`,
-                    `Commission échange : **${exchangeFee().toLocaleString("fr-FR")} %**`,
-                ].join("\n"),
-                inline: true,
-            },
+            ...chunkFields("🛒 Prix de vente (le client achète)", servers.map((server) => adminPriceLine(server, "buy"))),
+            ...chunkFields("💸 Prix de rachat (le client vend)", servers.map((server) => adminPriceLine(server, "sell"))),
+            { name: "♻️ Échange", value: exchangeLines(), inline: false },
             {
                 name: "📦 Stock",
                 value: stock.servers
-                    ? [
-                          `🟢 ${stock.open} · 🟡 ${stock.low} · 🕐 ${stock.full}`,
-                          `Total : **${formatMillions(stock.totalMillions)}**`,
-                      ].join("\n")
+                    ? `🟢 ${stock.open} · 🟡 ${stock.low} · 🕐 ${stock.full}\nTotal : **${formatMillions(stock.totalMillions)}**`
                     : "_Aucun stock configuré_",
                 inline: true,
             },
             {
                 name: "📊 Activité",
                 value: [
-                    `🎟️ Tickets ouverts : **${activity.openTickets}**${types ? ` (${types})` : ""}`,
+                    `🎟️ Tickets : **${activity.openTickets}**`,
                     `💼 Offres en attente : **${activity.pendingOffers}**`,
-                    `📈 Clients en suivi prix : **${activity.watchers}**`,
-                    `🔔 Clients en alerte stock : **${activity.alertSubscribers}**`,
+                    `📈 Suivis : **${activity.watchers}** · 🔔 Alertes : **${activity.alertSubscribers}**`,
                 ].join("\n"),
+                inline: true,
+            },
+            {
+                name: "🕘 Dernières modifications",
+                value: log.length
+                    ? log.map((entry) => `${relative(entry.at)}${entry.userId ? ` <@${entry.userId}>` : ""} — ${entry.text}`).join("\n")
+                    : "_Aucune modification pour l'instant._",
                 inline: false,
             },
-        );
+        )
+        .setFooter({ text: `Mis à jour automatiquement · ${BRAND.name}` })
+        .setTimestamp(new Date());
 }
 
 const button = (id, label, emoji, style = ButtonStyle.Secondary) =>
@@ -136,10 +209,7 @@ export function adminRows() {
 
 export function adminPayload(guildId, { running = priceFeedRunning() } = {}) {
     return {
-        embeds: [
-            adminOverviewEmbed(guildId),
-            feedStatusEmbed({ running, intervalMin: SETTINGS.priceFeedIntervalMin }),
-        ],
+        embeds: [adminOverviewEmbed(guildId, { running })],
         components: adminRows(),
     };
 }
