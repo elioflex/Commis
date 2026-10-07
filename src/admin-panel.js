@@ -13,6 +13,8 @@ import { findTextChannel } from "./guild-utils.js";
 import {
     competitorEdge,
     competitorPrices,
+    competitorPricesDh,
+    effectiveRate,
     eurPrice,
     exchangeFee,
     exchangeQuote,
@@ -88,6 +90,7 @@ const short = (value) => (typeof value === "number" ? value.toLocaleString("fr-F
 
 /** "**Draconiros** 1,55 € ✅ · KamasV 1,60 · 1Kamas 1,62 🎚️-2 %": our price, the shops, our tweaks. */
 export function adminPriceLine(server, kind) {
+    if (kind === "sell") return adminSellLine(server);
     const price = eurPrice(server.code, kind);
     const shops = Object.entries(competitorPrices(server.code, kind));
     const beaten = competitorEdge(server.code, kind).length;
@@ -95,6 +98,23 @@ export function adminPriceLine(server, kind) {
     const adjust = serverAdjustment(server.code, kind);
     return [
         `**${serverLabel(server)}** ${price ? eur(price.eur) : "à confirmer"}${verdict}`,
+        shops.length ? ` · ${shops.map(([site, value]) => `${COMPETITORS[site] ?? site} ${short(value)}`).join(" · ")}` : "",
+        adjust ? ` 🎚️${adjust > 0 ? "+" : ""}${adjust} %` : "",
+        price?.manual ? " 📌" : "",
+        price?.capped ? " 🛡️" : "",
+    ].join("");
+}
+
+/** Buyback is priced in DH: "**Draconiros** 7,37 DH ✅ · LesKamas 7,15 🎚️-6 %". */
+export function adminSellLine(server) {
+    const price = eurPrice(server.code, "sell");
+    const ours = effectiveRate("MAD", "sell", server.code);
+    const shops = Object.entries(competitorPricesDh(server.code));
+    const beaten = ours === null ? 0 : shops.filter(([, value]) => ours > value).length;
+    const verdict = ours === null || !shops.length ? "" : beaten === shops.length ? " ✅" : beaten ? " ➖" : " ❌";
+    const adjust = serverAdjustment(server.code, "sell");
+    return [
+        `**${serverLabel(server)}** ${ours === null ? "à confirmer" : formatMoney(ours, "MAD")}${verdict}`,
         shops.length ? ` · ${shops.map(([site, value]) => `${COMPETITORS[site] ?? site} ${short(value)}`).join(" · ")}` : "",
         adjust ? ` 🎚️${adjust > 0 ? "+" : ""}${adjust} %` : "",
         price?.manual ? " 📌" : "",
@@ -149,7 +169,7 @@ export function adminOverviewEmbed(guildId, { running = true } = {}) {
             [
                 `Prix web : **${feedEnabled() ? "actifs" : "en pause"}** · dernier relevé ${relative(feed.fetchedAt)}` +
                     (running ? "" : " · _relevé automatique coupé (PRICE_FEED=off)_"),
-                `🛒 Vente : **${percent(factors.buy)}** du concurrent le moins cher · 💸 Rachat : **${percent(factors.sell)}** du meilleur rachat`,
+                `🛒 Vente : **${percent(factors.buy)}** du concurrent le moins cher · 💸 Rachat : **${percent(factors.sell)}** de LesKamas (en DH)`,
                 feed.lastError ? `⚠️ ${feed.lastError.slice(0, 200)}` : null,
                 "_✅ meilleur que tous · ➖ que certains · ❌ que personne · 🎚️ ajustement · 📌 prix manuel · 🛡️ plafonné (marge)_",
             ]
@@ -158,7 +178,7 @@ export function adminOverviewEmbed(guildId, { running = true } = {}) {
         )
         .addFields(
             ...chunkFields("🛒 Prix de vente (le client achète)", servers.map((server) => adminPriceLine(server, "buy"))),
-            ...chunkFields("💸 Prix de rachat (le client vend)", servers.map((server) => adminPriceLine(server, "sell"))),
+            ...chunkFields("💸 Prix de rachat en DH (le client vend)", servers.map((server) => adminPriceLine(server, "sell"))),
             { name: "♻️ Échange", value: exchangeLines(), inline: false },
             {
                 name: "📦 Stock",

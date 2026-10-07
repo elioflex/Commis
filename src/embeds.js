@@ -151,10 +151,9 @@ export function paymentMethodsEmbed() {
 
 /** How an exchange is computed, in one line for the panel and the live board. */
 function exchangeRuleLine() {
-    const fee = exchangeFee().toLocaleString("fr-FR");
     return (
         "💱 Tu choisis le serveur où tu donnes, celui où tu reçois, puis la quantité : " +
-        `on convertit selon la valeur des kamas sur chaque serveur, **commission ${fee} %** incluse.\n` +
+        "on convertit selon la valeur des kamas sur chaque serveur.\n" +
         "🧮 **Simuler mon échange** (salon ♻️・échanger-kamas) donne le montant exact reçu."
     );
 }
@@ -174,7 +173,6 @@ export function exchangeSimEmbed(fromCode, toCode, given) {
     if (result) {
         lines.push(
             `📥 Tu reçois : **${formatMillions(result.received)}** sur ${name(toCode)}`,
-            `_Commission ${result.fee.toLocaleString("fr-FR")} % incluse._`,
         );
         if (stock.status === "full" || result.received > stock.millions) lines.push("", onOrderLine(name(toCode)));
     } else {
@@ -200,7 +198,7 @@ export function exchangeRecapEmbed(fromCode, toCode) {
     ];
     if (example) {
         lines.push(
-            `💱 **Taux : 1 M donné = ${formatRatio(example.ratio)} M reçu** (commission ${example.fee.toLocaleString("fr-FR")} % incluse)`,
+            `💱 **Taux : 1 M donné = ${formatRatio(example.ratio)} M reçu**`,
             `Exemple : **${formatMillions(1000)}** donnés → **${formatMillions(example.received)}** reçus`,
         );
     } else {
@@ -505,9 +503,6 @@ export function ticketIntroEmbed(ticket, user, type) {
                 inline: true,
             },
         );
-        if (ticket.exchangeFee != null) {
-            fields.push({ name: "💱 Commission", value: `${ticket.exchangeFee.toLocaleString("fr-FR")} % (incluse)`, inline: true });
-        }
     } else if (ticket.serverCode) {
         fields.push({ name: "🌍 Serveur Dofus", value: serverLabel(serverByCode(ticket.serverCode)) || ticket.serverCode, inline: true });
     }
@@ -528,7 +523,7 @@ export function ticketIntroEmbed(ticket, user, type) {
             name: "💳 Paiement",
             value: [
                 method,
-                `Devise : **${currencyInfo(ticket.currency).code}**`,
+                `Devise : **${currencyInfo(ticket.currency).name}**`,
                 `Taux : **${rate === null ? "à confirmer" : `${formatMoney(rate, ticket.currency)}/M`}**`,
                 `Total : **${total == null ? "à confirmer" : formatMoney(total, ticket.currency)}**`,
                 lockedUntil ? `🔒 Prix garanti jusqu'à <t:${Math.floor(lockedUntil / 1000)}:t>` : null,

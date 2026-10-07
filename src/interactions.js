@@ -1,6 +1,6 @@
 import { AttachmentBuilder, MessageFlags } from "discord.js";
 
-import { CURRENCIES, CURRENCY_CODES, TICKET_TYPES, paymentByCode, serverByCode, serverLabel } from "../config.js";
+import { CURRENCIES, CURRENCY_NAMES, TICKET_TYPES, parseCurrency, paymentByCode, serverByCode, serverLabel } from "../config.js";
 import {
     alertClearRow,
     alertSelectRow,
@@ -874,11 +874,11 @@ async function submitOffer(interaction, kind, serverCode) {
     }
     const millions = parseMillions(interaction.fields.getTextInputValue("millions"));
     const price = parsePrice(interaction.fields.getTextInputValue("price"));
-    const currency = interaction.fields.getTextInputValue("currency").trim().toUpperCase();
+    const currency = parseCurrency(interaction.fields.getTextInputValue("currency"));
     const problems = [
         millions === null && "Quantité invalide (ex : `500`).",
         price === null && "Prix par M invalide (ex : `1.40`).",
-        !CURRENCY_CODES.includes(currency) && `Devise inconnue : utilise ${CURRENCY_CODES.join(" ou ")}.`,
+        !currency && `Devise inconnue : utilise ${CURRENCY_NAMES.join(" ou ")}.`,
     ].filter(Boolean);
     if (problems.length) return respond(interaction, { embeds: [errorEmbed(problems.join("\n"))] });
 
@@ -920,12 +920,11 @@ async function createTicketFromModal(interaction, typeId, serverCode, paymentCod
         }
         payload.millions = millions;
 
-        const currency = interaction.fields.getTextInputValue("currency").trim().toUpperCase();
-        if (!CURRENCY_CODES.includes(currency)) {
+        const typed = interaction.fields.getTextInputValue("currency").trim();
+        const currency = parseCurrency(typed);
+        if (!currency) {
             return respond(interaction, {
-                embeds: [
-                    errorEmbed(`Devise inconnue \`${currency}\`. Devises acceptées : ${CURRENCY_CODES.join(", ")}.`),
-                ],
+                embeds: [errorEmbed(`Devise inconnue \`${typed}\`. Devises acceptées : ${CURRENCY_NAMES.join(", ")}.`)],
             });
         }
         payload.currency = currency;
@@ -1027,7 +1026,7 @@ async function createExchangeTicket(interaction, fromCode, toCode) {
         `♻️ Ton ticket est ouvert : ${channel}`,
         `📤 Tu donnes **${formatMillions(given)}** sur ${name(fromCode)}`,
         exchange
-            ? `📥 Tu reçois **${formatMillions(exchange.received)}** sur ${name(toCode)} (commission ${exchange.fee.toLocaleString("fr-FR")} % incluse)`
+            ? `📥 Tu reçois **${formatMillions(exchange.received)}** sur ${name(toCode)}`
             : `📥 Quantité reçue sur ${name(toCode)} : à confirmer avec le staff`,
     ];
     if (exchange && (stock.status === "full" || exchange.received > stock.millions)) lines.push("", onOrderLine(name(toCode)));

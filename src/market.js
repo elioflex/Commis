@@ -147,6 +147,33 @@ export function payoutReference(serverCode) {
     return retail === null ? null : Math.round(retail * RETAIL_TO_PAYOUT * 10_000) / 10_000;
 }
 
+/** What leskamas.com pays in DH/M (its « Maroc(Dhs) » column), or null. Our buyback is priced on it. */
+export function payoutReferenceDh(serverCode) {
+    return positive(feedState().sellReferenceDh?.[serverCode]?.dh);
+}
+
+/** Each shop's payout in DH/M for this server: `{ leskamas: 7.15 }`. */
+export function competitorPricesDh(serverCode) {
+    const prices = {};
+    for (const [site, value] of Object.entries(feedState().sellReferenceDh?.[serverCode]?.sources ?? {})) {
+        if (positive(value) !== null) prices[site] = value;
+    }
+    return prices;
+}
+
+/**
+ * Automatic buyback price in DH: leskamas's DH payout × our factor × the
+ * server's adjustment, rounded up to the centime (in the seller's favour).
+ */
+export function autoSellDh(serverCode) {
+    if (!feedEnabled()) return null;
+    const reference = payoutReferenceDh(serverCode);
+    const factor = feedFactors().sell;
+    if (reference === null || !(factor > 0)) return null;
+    const dh = reference * factor * (1 + serverAdjustment(serverCode, "sell") / 100);
+    return Math.max(0.01, Math.ceil(dh * 100 - 1e-9) / 100);
+}
+
 /**
  * Each competitor's price for this server, as last read by the feed:
  * `{ kamasv: 0.77, "1kamas": 0.8 }` for buy (what they charge), `{ leskamas: 0.52 }`
@@ -248,6 +275,12 @@ export function resolveServers(text) {
 
 /** Automatic EUR price: best competitor × our factor × the server's adjustment, rounded for the customer. */
 export function autoPrice(serverCode, kind) {
+    // Buyback is priced in DH (leskamas's most precise column); the euro price follows our DH/€ rate.
+    if (kind === "sell") {
+        const dh = autoSellDh(serverCode);
+        const ratio = currencyRatio("MAD", "sell");
+        if (dh !== null && ratio) return roundForCustomer(dh / ratio, "sell");
+    }
     const web = webPrice(serverCode, kind);
     if (web === null) return null;
     return roundForCustomer(web * (1 + serverAdjustment(serverCode, kind) / 100), kind);
@@ -310,6 +343,10 @@ export function effectiveRate(currency, kind, serverCode) {
     }
     const price = eurPrice(serverCode, kind);
     if (!price) return null;
+    if (kind === "sell" && String(currency).toUpperCase() === "MAD" && !price.manual && !price.capped) {
+        const dh = autoSellDh(serverCode);
+        if (dh !== null) return dh;
+    }
     const ratio = currencyRatio(currency, kind);
     return ratio === null ? null : Math.round(price.eur * ratio * 1000) / 1000;
 }
@@ -585,7 +622,7 @@ export function rateLines({ kinds = RATE_KINDS } = {}) {
                 const label = kind === "buy" ? "Achat client" : kind === "sell" ? "Vente client" : "Échange";
                 return `${label} : **${formatMoney(entry[kind], currency.code)}**/M`;
             });
-        if (cells.length) lines.push(`**${currency.code}** — ${cells.join(" • ")}`);
+        if (cells.length) lines.push(`**${currency.name}** — ${cells.join(" • ")}`);
     }
     return lines.length ? lines : ["_Aucun taux configuré. Staff : utilise `/rate set`._"];
 }

@@ -155,7 +155,7 @@ export function offerModal(kind, serverCode) {
         .addComponents(
             input("millions", "Quantité (en millions)", "ex : 500"),
             input("price", "Ton prix par M", "ex : 1.40"),
-            input("currency", `Devise (${CURRENCIES.map((c) => c.code).join(" / ")})`, "EUR"),
+            input("currency", `Devise (${CURRENCIES.map((c) => c.name).join(" / ")})`, "EUR"),
             input("personnage", "Pseudo du personnage", "ex : Kamasdu93", false),
         );
 }
@@ -380,7 +380,7 @@ export function exchangeModal(fromCode, toCode, given = null) {
             textRow(
                 new TextInputBuilder()
                     .setCustomId("personnage")
-                    .setLabel("Pseudo de ton perso sur le serveur destination")
+                    .setLabel("Pseudo de ton perso (serveur destination)")
                     .setPlaceholder("ex : MyStique-Tylezia")
                     .setStyle(TextInputStyle.Short)
                     .setRequired(true)
@@ -417,7 +417,7 @@ export function marketModal(typeId, serverCode, paymentCode) {
         textRow(
             new TextInputBuilder()
                 .setCustomId("currency")
-                .setLabel(`Devise (${CURRENCIES.map((c) => c.code).join(" / ")})`)
+                .setLabel(`Devise (${CURRENCIES.map((c) => c.name).join(" / ")})`)
                 .setPlaceholder("EUR")
                 .setStyle(TextInputStyle.Short)
                 .setRequired(true)

@@ -10,7 +10,8 @@ import { read, update } from "./store.js";
  *   (`/wp-json/wc/store/v1/`) is the public JSON behind their product pages.
  *   Their median is the retail reference → `feed.reference`.
  * - leskamas.com BUYS kamas from players; its price list is a plain HTML table.
- *   That payout is our sell reference → `feed.sellReference`.
+ *   That payout is our sell reference → `feed.sellReference` (EUR column) and
+ *   `feed.sellReferenceDh` (Maroc DH column, more precise: our buyback is priced on it).
  *
  * We fetch sequentially and only every `PRICE_FEED_INTERVAL_MIN`, directly (no proxy).
  *
@@ -169,7 +170,8 @@ export function kamasVariationTargets(products) {
  * ("Dofus Touch Kamas") then one row per server: name, Paypal €/M, …, status.
  * The Paypal/SEPA column is the payout in EUR per million.
  */
-export function parseLeskamas(html) {
+export function parseLeskamas(html, { currency = "EUR" } = {}) {
+    const unit = currency === "DH" ? /([\d.,]+)\s*Dhs?\s*\/\s*M/i : /([\d.,]+)\s*€\s*\/\s*M/i;
     const table = String(html ?? "").match(/<table[^>]*hovertable[\s\S]*?<\/table>/i)?.[0] ?? "";
     const prices = {};
     let game = null;
@@ -186,8 +188,10 @@ export function parseLeskamas(html) {
         if (cells.length < 2) continue;
 
         const code = matchServer(game, cells[0].text);
-        const price = Number.parseFloat(cells[1].text.replace(",", "."));
-        if (code && /€\s*\/\s*M/i.test(cells[1].text) && price > 0) prices[code] = round4(price);
+        // EUR = the Paypal/SEPA column (first price); DH = the « Maroc(Dhs) » column.
+        const cell = currency === "DH" ? cells.slice(1).find((c) => unit.test(c.text)) : cells[1];
+        const price = Number.parseFloat(cell?.text.match(unit)?.[1]?.replace(",", ".") ?? "");
+        if (code && price > 0) prices[code] = round4(price);
     }
     return prices;
 }
@@ -206,7 +210,8 @@ async function fetchAllPages(fetchJson, url) {
 
 const readers = {
     async leskamas({ fetchText }, base) {
-        return parseLeskamas(await fetchText(`${base}/vendre-des-kamas.html`));
+        const html = await fetchText(`${base}/vendre-des-kamas.html`);
+        return { prices: parseLeskamas(html), dh: parseLeskamas(html, { currency: "DH" }) };
     },
     async kamasv({ fetchJson }, base) {
         const categories = await fetchAllPages(fetchJson, `${base}/wp-json/wc/store/v1/products/categories`);
@@ -233,7 +238,7 @@ const readers = {
  * price moving more than 50 % is held as `pending` until a second fetch
  * confirms it (within 10 %), so one broken page cannot reprice the shop.
  */
-export function buildReference(bySource, previous = {}, pending = {}) {
+export function buildReference(bySource, previous = {}, pending = {}, field = "eur") {
     const reference = {};
     const nextPending = {};
     const held = [];
@@ -247,7 +252,7 @@ export function buildReference(bySource, previous = {}, pending = {}) {
         const eur = round4(median(Object.values(sources)));
         if (eur === null) continue;
 
-        const before = previous[code]?.eur;
+        const before = previous[code]?.[field];
         const jumped = Number.isFinite(before) && Math.abs(eur - before) / before > MAX_JUMP;
         const confirmed = Number.isFinite(pending[code]) && Math.abs(eur - pending[code]) / pending[code] <= 0.1;
 
@@ -256,7 +261,7 @@ export function buildReference(bySource, previous = {}, pending = {}) {
             nextPending[code] = eur;
             held.push(code);
         } else {
-            reference[code] = { eur, sources };
+            reference[code] = { [field]: eur, sources };
         }
     }
 
@@ -283,12 +288,14 @@ export async function runPriceFeed({
     if (inFlight) return inFlight;
 
     inFlight = (async () => {
-        const byKind = { retail: {}, payout: {} };
+        const byKind = { retail: {}, payout: {}, payoutDh: {} };
         const errors = [];
 
         for (const source of sources) {
             try {
-                const prices = await readers[source.id]({ fetchJson, fetchText }, source.base);
+                const result = await readers[source.id]({ fetchJson, fetchText }, source.base);
+                const prices = result.prices ?? result;
+                if (Object.keys(result.dh ?? {}).length) byKind.payoutDh[source.id] = result.dh;
                 if (Object.keys(prices).length) byKind[source.kind ?? "retail"][source.id] = prices;
                 else errors.push(`${source.label} : aucun prix reconnu`);
             } catch (error) {
@@ -315,10 +322,15 @@ export async function runPriceFeed({
         // A kind with no working source this round keeps its previous prices untouched.
         const retail = buildReference(byKind.retail, feed.reference ?? {}, feed.pending ?? {});
         const payout = buildReference(byKind.payout, feed.sellReference ?? {}, feed.sellPending ?? {});
-        const changedIn = (next, previous = {}) =>
-            Object.keys(next).filter((code) => next[code]?.eur !== previous[code]?.eur).length;
-        const changed = changedIn(retail.reference, feed.reference) + changedIn(payout.reference, feed.sellReference);
-        const held = [...retail.held, ...payout.held.map((code) => `${code} (rachat)`)];
+        const payoutDh = buildReference(byKind.payoutDh, feed.sellReferenceDh ?? {}, feed.sellPendingDh ?? {}, "dh");
+        const changedIn = (next, previous = {}, field = "eur") =>
+            Object.keys(next).filter((code) => next[code]?.[field] !== previous[code]?.[field]).length;
+        const changed =
+            changedIn(retail.reference, feed.reference) +
+            changedIn(payout.reference, feed.sellReference) +
+            changedIn(payoutDh.reference, feed.sellReferenceDh, "dh");
+        const sellHeld = [...new Set([...payout.held, ...payoutDh.held])];
+        const held = [...retail.held, ...sellHeld.map((code) => `${code} (rachat)`)];
 
         update("market.json", (data) => {
             data.feed = {
@@ -327,6 +339,8 @@ export async function runPriceFeed({
                 pending: retail.pending,
                 sellReference: payout.reference,
                 sellPending: payout.pending,
+                sellReferenceDh: payoutDh.reference,
+                sellPendingDh: payoutDh.pending,
                 lastAttemptAt: now,
                 fetchedAt: now,
                 lastError,

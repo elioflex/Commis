@@ -66,11 +66,11 @@ const ONEKAMAS_VARIATIONS = {
 
 // leskamas.com « vendre des kamas » table, trimmed.
 const LESKAMAS_HTML = `<p>Vendez vos kamas</p><div><table border="1" class="hovertable"><tbody>
-<tr><td>Server</td><td>Paypal / Skrill / SEPA</td><td>BitCoin</td><td>Status</td></tr>
+<tr><td>Server</td><td>Paypal / Skrill / SEPA</td><td>BitCoin</td><td>Maroc(Dhs)</td><td>Status</td></tr>
 <tr style="background: white"><td colspan="7" style="text-align:center">Dofus Kamas</td></tr>
-<tr onmouseover="x"><td>Draconiros</td><td>0.52€/M</td><td>0.515€/M</td><td>Incomplet</td></tr>
-<tr><td>Ombre(Shadow)</td><td>0.371€/M</td><td>0.367€/M</td><td><font color='red'>Stock complet</font></td></tr>
-<tr><td>Salar</td><td>0.30€/M</td><td>0.297€/M</td><td>Incomplet</td></tr>
+<tr onmouseover="x"><td>Draconiros</td><td>0.52€/M</td><td>0.515€/M</td><td>5.720 Dhs/M</td><td>Incomplet</td></tr>
+<tr><td>Ombre(Shadow)</td><td>0.371€/M</td><td>0.367€/M</td><td>4.081 Dhs/M</td><td><font color='red'>Stock complet</font></td></tr>
+<tr><td>Salar</td><td>0.30€/M</td><td>0.297€/M</td><td>3.300 Dhs/M</td><td>Incomplet</td></tr>
 <tr style="background: white"><td colspan="7" style="text-align:center">Dofus Touch Kamas</td></tr>
 <tr><td>Kelerog</td><td>2.28€/M</td><td>2.257€/M</td><td>Incomplet</td></tr>
 <tr><td>Temporix-1</td><td>0.1€/M</td><td>0.099€/M</td><td>Incomplet</td></tr>
@@ -119,6 +119,7 @@ test("1kamas: one variation per matched server, first product wins", () => {
 
 test("leskamas: payout per game section, seasonal servers skipped", () => {
     assert.deepEqual(parseLeskamas(LESKAMAS_HTML), { drac: 0.52, ombre: 0.371, salar: 0.3 });
+    assert.deepEqual(parseLeskamas(LESKAMAS_HTML, { currency: "DH" }), { drac: 5.72, ombre: 4.081, salar: 3.3 });
     assert.deepEqual(parseLeskamas("<html>maintenance</html>"), {});
 });
 
@@ -167,16 +168,22 @@ test("runPriceFeed stores the reference and prices follow manual > web > base", 
         assert.equal(feed.reference.talkasha, undefined, "out-of-stock variation ignored");
 
         assert.equal(feed.sellReference.drac.eur, 0.52);
+        assert.deepEqual(feed.sellReferenceDh.drac, { dh: 5.72, sources: { leskamas: 5.72 } });
+
+        // Buyback is priced on the DH column: 5.72 × 1.03 = 5.8916 → 5.90 DH (rounded up),
+        // and the euro price follows our DH/€ rate.
+        assert.equal(effectiveRate("MAD", "sell", "drac"), 5.9);
 
         // Buy: 3 % under the cheapest shop (0.77 → 0.7469, rounded down).
-        // Sell: 3 % over leskamas's payout (0.52 → 0.5356, rounded up).
+        // Sell in EUR follows the DH price: 5.90 DH ÷ (10.2 / 0.95) = 0.5495 → 0.55 (rounded up).
         assert.equal(priceSource("drac", "buy"), "auto");
         assert.equal(autoPrice("drac", "buy"), 0.74);
-        assert.equal(effectiveRate("EUR", "sell", "drac"), 0.54);
+        assert.equal(effectiveRate("EUR", "sell", "drac"), 0.55);
         // No payout source for Talkasha… and no retail either (out of stock) → base.
         assert.equal(priceSource("talkasha", "sell"), "base");
-        // Salar: payout only → sell is automatic (0.30 × 103 % → 0.31), buy stays on the base rate.
-        assert.equal(autoPrice("salar", "sell"), 0.31);
+        // Salar: payout only → sell is automatic (3.30 DH × 103 % → 3.40 DH → 0.32 €), buy stays on the base rate.
+        assert.equal(effectiveRate("MAD", "sell", "salar"), 3.4);
+        assert.equal(autoPrice("salar", "sell"), 0.32);
         assert.equal(priceSource("salar", "buy"), "base");
 
         // Manual wins, clearing it gives the web price back.

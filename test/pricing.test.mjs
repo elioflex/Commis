@@ -198,7 +198,7 @@ test("exchange recap shows both servers, the rate and an example", () => {
         assert.ok(text.includes(from.name) && text.includes(to.name));
         assert.ok(text.includes("0,855"), text);
         assert.ok(text.includes("855 M"), text);
-        assert.ok(text.includes("commission 10 %"), text);
+        assert.ok(!/commission/i.test(text), "the exchange commission is never shown to customers");
     });
 });
 

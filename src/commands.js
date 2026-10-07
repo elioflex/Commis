@@ -152,7 +152,7 @@ export const commandData = [
                         .setName("devise")
                         .setDescription("Devise")
                         .setRequired(true)
-                        .addChoices(...CURRENCIES.map((currency) => ({ name: currency.code, value: currency.code }))),
+                        .addChoices(...CURRENCIES.map((currency) => ({ name: currency.name, value: currency.code }))),
                 )
                 .addStringOption((option) =>
                     option

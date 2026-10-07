@@ -70,16 +70,29 @@ export const SETTINGS = {
         : "when-empty",
 };
 
-/** Currencies the bot quotes prices in: euro and Moroccan dirham only. */
+/**
+ * Currencies the bot quotes prices in: euro and dirham only. `code` is internal
+ * (stored data); customers only ever see `name` — on our server it's « DH », never « MAD ».
+ */
 export const CURRENCIES = [
-    { code: "EUR", label: "Euro", symbol: "€" },
-    { code: "MAD", label: "Dirham marocain", symbol: "DH" },
+    { code: "EUR", name: "EUR", label: "Euro", symbol: "€" },
+    { code: "MAD", name: "DH", label: "Dirham", symbol: "DH" },
 ];
 
 export const CURRENCY_CODES = CURRENCIES.map((c) => c.code);
 
 export const currencyInfo = (code) =>
-    CURRENCIES.find((c) => c.code === code.toUpperCase()) ?? { code, label: code, symbol: "" };
+    CURRENCIES.find((c) => c.code === code.toUpperCase()) ?? { code, name: code, label: code, symbol: "" };
+
+/** "DH", "dhs", "dirham", "MAD" → "MAD" · "EUR", "€", "euro" → "EUR" · anything else → null. */
+export function parseCurrency(input) {
+    const raw = String(input ?? "").trim().toUpperCase().replace(/\s|\./g, "");
+    if (/^(EUR|EUROS?|€)$/.test(raw)) return "EUR";
+    if (/^(DHS?|DIRHAMS?|MAD)$/.test(raw)) return "MAD";
+    return null;
+}
+
+export const CURRENCY_NAMES = CURRENCIES.map((c) => c.name);
 
 /**
  * Dofus servers you trade on — Dofus 3 only, we don't sell Touch, Retro or Wakfu
